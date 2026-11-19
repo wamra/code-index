@@ -75,7 +75,11 @@ func (t *tailBuffer) String() string {
 
 // Start launches the server process and returns an uninitialized client.
 func Start(spec Spec) (*Client, error) {
-	cmd := exec.Command(spec.Command, spec.Args...)
+	exe, err := ResolveCommand(spec.Command)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(exe, spec.Args...)
 	cmd.Dir = spec.Dir
 	cmd.Env = append(os.Environ(), spec.Env...)
 	stdin, err := cmd.StdinPipe()
@@ -140,13 +144,82 @@ func (cl *Client) Stderr() string { return cl.stderr.String() }
 // Capabilities returns what the server advertised in initialize.
 func (cl *Client) Capabilities() Capabilities { return cl.caps }
 
-// PathToURI converts an absolute file path to a file:// URI.
-func PathToURI(p string) string {
-	p = filepath.ToSlash(p)
-	if runtime.GOOS == "windows" && !strings.HasPrefix(p, "/") {
-		p = "/" + p
+// PathToURI converts an absolute file path of the running OS to a file:// URI.
+func PathToURI(p string) string { return pathToURI(p, runtime.GOOS == "windows") }
+
+// pathToURI builds file URIs the way language servers expect them:
+// "file:///C:/dir/a%20b.ps1" for a Windows drive path, "file://host/share/x"
+// for a UNC path and "file:///dir/a.sh" otherwise. Special characters are
+// percent-encoded. windows selects the Windows path rules so the function can
+// be tested on any OS.
+func pathToURI(p string, windows bool) string {
+	u := url.URL{Scheme: "file"}
+	if windows {
+		p = strings.ReplaceAll(p, `\`, "/")
+		if strings.HasPrefix(p, "//") { // \\host\share\x
+			rest := strings.TrimLeft(p, "/")
+			host, path, _ := strings.Cut(rest, "/")
+			u.Host, u.Path = host, "/"+path
+			return u.String()
+		}
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
 	}
-	return (&url.URL{Scheme: "file", Path: p}).String()
+	u.Path = p
+	return u.String()
+}
+
+// URIToPath converts a file:// URI to a path of the running OS.
+func URIToPath(uri string) (string, error) { return uriToPath(uri, runtime.GOOS == "windows") }
+
+func uriToPath(uri string, windows bool) (string, error) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "file" {
+		return "", fmt.Errorf("not a file URI: %s", uri)
+	}
+	p := u.Path // url.Parse already decoded %XX (including %3A in "c%3A")
+	if !windows {
+		return p, nil
+	}
+	if u.Host != "" && u.Host != "localhost" {
+		return `\\` + u.Host + strings.ReplaceAll(p, "/", `\`), nil
+	}
+	if len(p) >= 3 && p[0] == '/' && p[2] == ':' { // /C:/dir
+		p = p[1:]
+	}
+	return strings.ReplaceAll(p, "/", `\`), nil
+}
+
+// SameFile reports whether two file URIs name the same file. On Windows the
+// drive letter is compared case-insensitively ("file:///c%3A/x" equals
+// "file:///C:/x"), as servers disagree on its case and on encoding the colon.
+func SameFile(a, b string) bool { return sameFile(a, b, runtime.GOOS == "windows") }
+
+func sameFile(a, b string, windows bool) bool {
+	pa, errA := uriToPath(a, windows)
+	pb, errB := uriToPath(b, windows)
+	if errA != nil || errB != nil {
+		return a == b
+	}
+	if windows {
+		return strings.EqualFold(pa, pb)
+	}
+	return pa == pb
+}
+
+// ResolveCommand finds the executable for a language server command through
+// PATH (and PATHEXT on Windows, so "bash-language-server" finds the npm shim
+// "bash-language-server.cmd").
+func ResolveCommand(command string) (string, error) {
+	p, err := exec.LookPath(command)
+	if err != nil {
+		return "", fmt.Errorf("language server command %q not found on PATH: %w", command, err)
+	}
+	return p, nil
 }
 
 var startingRe = regexp.MustCompile(`(?i)(is starting|still starting|not (yet )?(initialized|ready)|initializing|loading|indexing)`)

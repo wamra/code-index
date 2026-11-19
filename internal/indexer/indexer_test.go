@@ -351,3 +351,25 @@ func TestOtherWorkspaceAndLock(t *testing.T) {
 		t.Errorf("concurrent run: %v, want ErrLocked", err)
 	}
 }
+
+func TestCRLFAndBOMSourcesIndexLikeLF(t *testing.T) {
+	lf := "# Adds numbers.\nfunction Add-Numbers {\n  <#\n  .SYNOPSIS\n  Sums two values.\n  #>\n}\n"
+	crlf := "\ufeff" + strings.ReplaceAll(lf, "\n", "\r\n")
+	for name, src := range map[string]string{"lf": lf, "crlf+bom": crlf} {
+		root := tree(t, map[string]string{"a.ps1": src})
+		st := openStore(t)
+		res := run(t, st, fakeCfg("nohover", ".ps1"), root, false)
+		if res.Indexed != 1 || res.Failed != 0 {
+			t.Fatalf("%s: %+v", name, res)
+		}
+		if got := scalar(t, st, `SELECT signature FROM symbols WHERE name='Add-Numbers'`); got != "function Add-Numbers" {
+			t.Errorf("%s: signature = %q", name, got)
+		}
+		if got := scalar(t, st, `SELECT doc FROM symbols WHERE name='Add-Numbers'`); got != "Adds numbers." {
+			t.Errorf("%s: doc = %q", name, got)
+		}
+		if got := scalar(t, st, `SELECT start_line FROM symbols WHERE name='Add-Numbers'`); got != "1" {
+			t.Errorf("%s: start_line = %s", name, got)
+		}
+	}
+}

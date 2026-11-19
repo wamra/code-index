@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/binary"
 	"math"
+	"net/url"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -146,4 +148,49 @@ func vecBytes(v []float32) []byte {
 		binary.LittleEndian.PutUint32(b[4*i:], math.Float32bits(f))
 	}
 	return b
+}
+
+func TestJournalModePerOS(t *testing.T) {
+	if journalMode("windows") != "DELETE" || journalMode("linux") != "WAL" || journalMode("darwin") != "WAL" {
+		t.Error("rollback journal on Windows only")
+	}
+}
+
+func TestDSNKeepsPathIntact(t *testing.T) {
+	q := url.Values{}
+	q.Set("mode", "rw")
+	for path, want := range map[string]string{
+		`/tmp/x/code.sqlite`:     `file:/tmp/x/code.sqlite?mode=rw`,
+		`C:\Users\x\code.sqlite`: `file:C:%5CUsers%5Cx%5Ccode.sqlite?mode=rw`,
+		`\\srv\share\a.sqlite`:   `file:%5C%5Csrv%5Cshare%5Ca.sqlite?mode=rw`,
+		`/tmp/50% #1?/a.sqlite`:  `file:/tmp/50%25%20%231%3F/a.sqlite?mode=rw`,
+	} {
+		if got := dsn(path, q); got != want {
+			t.Errorf("dsn(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// '#' starts a fragment and '%' an escape in a file: URI; neither may change
+// which file is opened.
+func TestOpenPathWithURICharacters(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "50%41 #1")
+	path := filepath.Join(dir, "code.sqlite")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.SetMeta(context.Background(), "k", "v")
+	st.Close()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("database not at the requested path: %v", err)
+	}
+	st, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if v, _ := st.Meta(context.Background(), "k"); v != "v" {
+		t.Errorf("meta k = %q after reopen", v)
+	}
 }

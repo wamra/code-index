@@ -325,8 +325,9 @@ func documentSymbols(ctx context.Context, cl *lsp.Client, uri, text string, rs *
 // server fails on the file, the file is recorded with status 'failed' (and no
 // symbols) so the next run retries it, and the error is returned.
 func indexFile(ctx context.Context, st *store.Store, cl *lsp.Client, rs *retryState, lc config.Language, c candidate, data []byte, sha string, oldID int64, hasVec bool) (fileStats, error) {
-	text := strings.ToValidUTF8(string(data), "�")
-	lines := strings.Split(text, "\n")
+	text := strings.ToValidUTF8(string(data), "\ufffd")
+	text = strings.TrimPrefix(text, "\ufeff") // editors send the text without a BOM
+	lines := splitLines(text)
 	uri := lsp.PathToURI(c.abs)
 
 	if err := cl.DidOpen(uri, lc.LanguageID, 1, text); err != nil {

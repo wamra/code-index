@@ -314,3 +314,15 @@ func helpComment(lines []string, startLine, endLine int) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+// splitLines splits source text into lines for position arithmetic and comment
+// extraction. LF and CRLF files give the same lines (no trailing "\r"), so
+// columns, hashes, doc comments and declaration lines do not depend on the
+// line-ending style.
+func splitLines(text string) []string {
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimSuffix(l, "\r")
+	}
+	return lines
+}

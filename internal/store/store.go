@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 
@@ -68,6 +69,24 @@ type Store struct {
 	path string
 }
 
+// JournalMode is the journal mode every connection asks for: WAL, except on
+// Windows, where it is a rollback journal (DELETE).
+//
+// The pinned SQLite driver maps the WAL index at an offset that is not a
+// multiple of the Windows allocation granularity, so a transaction that grows
+// the WAL past its first index region (about 4,000 pages) fails with "disk I/O
+// error" (ncruces/go-sqlite3 issue 330, fixed upstream in v0.30.1, which the
+// sqlite-vec binding does not link against). A rollback journal uses no shared
+// memory. The same lesson, learned in session-index.
+var JournalMode = journalMode(runtime.GOOS)
+
+func journalMode(goos string) string {
+	if goos == "windows" {
+		return "DELETE"
+	}
+	return "WAL"
+}
+
 // dsn builds the "file:" URI for path (percent-encoded, no "//" authority).
 func dsn(path string, q url.Values) string {
 	return "file:" + (&url.URL{Path: path}).EscapedPath() + "?" + q.Encode()
@@ -81,7 +100,7 @@ func Open(path string) (*Store, error) {
 	setupCompilationCache()
 	q := url.Values{}
 	q.Add("_pragma", "busy_timeout(30000)")
-	q.Add("_pragma", "journal_mode(WAL)")
+	q.Add("_pragma", "journal_mode("+JournalMode+")")
 	q.Add("_pragma", "synchronous(NORMAL)")
 	q.Add("_pragma", "foreign_keys(1)")
 	db, err := sql.Open("sqlite3", dsn(path, q))
@@ -99,7 +118,7 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db, path: path}, nil
 }
 
-// Close folds the WAL into the main file (PRAGMA wal_checkpoint(TRUNCATE)) so
+// Close (WAL mode) folds the WAL into the main file (PRAGMA wal_checkpoint(TRUNCATE)) so
 // the database file is complete on its own, then closes the database. A busy
 // checkpoint (another process has it open) is not an error.
 func (s *Store) Close() error {
