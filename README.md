@@ -48,11 +48,10 @@ The binary is self-contained (no CGO).
 
 ## Platforms
 
-macOS is the development platform and is tested. Linux and Windows are
-build-verified only (`CGO_ENABLED=0` cross-builds and `go vet` for both) and
-untested at runtime until CI runs: the repository has no remote yet, so
-`.github/workflows/ci.yml` (vet and test on Linux and Windows) has not run. The
-portability measures: SQLite uses a rollback journal on Windows and WAL
+macOS is the development platform. Linux and Windows run `go vet` and the test
+suite in CI (`.github/workflows/ci.yml`); the tests use a fake language server
+and a fake embedding server, so real language servers have only been exercised
+on macOS. The portability measures: SQLite uses a rollback journal on Windows and WAL
 elsewhere, file URIs and drive letters are handled for Windows, CRLF sources
 are accepted, server commands resolve through PATH and PATHEXT (`.cmd` shims),
 and paths stored in the index and shown in output always use forward slashes.
