@@ -30,6 +30,9 @@ type Options struct {
 	Log   io.Writer
 	// Open starts a language server; nil means lsp.Start.
 	Open func(lsp.Spec) (*lsp.Client, error)
+	// EmptyRetryDelays overrides the waits before re-asking for symbols after
+	// an empty answer (nil = DefaultEmptyRetryDelays).
+	EmptyRetryDelays []time.Duration
 }
 
 // Result summarizes a run.
@@ -159,7 +162,10 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 			continue
 		}
 		o.logf("%s: %s %s ready, indexing %d file(s)", lang, orDash(cl.ServerName), cl.ServerVersion, len(items))
-		rs := &retryState{}
+		rs := &retryState{delays: o.EmptyRetryDelays}
+		if rs.delays == nil {
+			rs.delays = DefaultEmptyRetryDelays
+		}
 		for _, w := range items {
 			if ctx.Err() != nil {
 				break
@@ -274,17 +280,20 @@ func dropFile(ctx context.Context, db *sql.DB, id int64, hasVec bool) error {
 
 type fileStats struct{ symbols, chunks int }
 
-// emptyRetryDelays are the waits before re-asking for symbols when a server
+// DefaultEmptyRetryDelays are the waits before re-asking for symbols when a server
 // answered with an empty list for a non-empty file. bash-language-server
 // analyzes a document asynchronously after didOpen and answers [] (no error)
 // until it is done, so an empty answer is not trusted at once.
-var emptyRetryDelays = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second}
+var DefaultEmptyRetryDelays = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second}
 
 // retryState adapts the empty-answer retry to the server: once a retry has
 // produced symbols the server is known to be asynchronous and retries stay on;
 // after three retries that found nothing they stop (the files really are empty
 // of symbols), so a server that answers promptly is not slowed down.
-type retryState struct{ helped, wasted int }
+type retryState struct {
+	helped, wasted int
+	delays         []time.Duration
+}
 
 func (r *retryState) allow() bool { return r.helped > 0 || r.wasted < 3 }
 
@@ -293,7 +302,7 @@ func documentSymbols(ctx context.Context, cl *lsp.Client, uri, text string, rs *
 	if err != nil || len(syms) > 0 || strings.TrimSpace(text) == "" || !rs.allow() {
 		return syms, err
 	}
-	for _, d := range emptyRetryDelays {
+	for _, d := range rs.delays {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
