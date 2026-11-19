@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -46,7 +47,7 @@ type env struct {
 func setup(t *testing.T, embedURL string) env {
 	t.Helper()
 	tmp := t.TempDir()
-	e := env{root: filepath.Join(tmp, "ws"), cfgPath: filepath.Join(tmp, "config.json"), dbPath: filepath.Join(tmp, "db", "index.sqlite")}
+	e := env{root: filepath.Join(tmp, "ws"), cfgPath: filepath.Join(tmp, "config.json")}
 	src := "../../testdata/fixture-ps"
 	filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
 		rel, _ := filepath.Rel(src, p)
@@ -57,6 +58,7 @@ func setup(t *testing.T, embedURL string) env {
 		return os.WriteFile(filepath.Join(e.root, rel), b, 0o644)
 	})
 	e.root, _ = filepath.EvalSymlinks(e.root)
+	e.dbPath = filepath.Join(e.root, ".Wammy", "code.sqlite")
 	cfg := map[string]any{
 		"languages": map[string]any{
 			"powershell": map[string]any{
@@ -73,9 +75,10 @@ func setup(t *testing.T, embedURL string) env {
 	b, _ := json.Marshal(cfg)
 	os.WriteFile(e.cfgPath, b, 0o644)
 	t.Setenv("CODE_INDEX_CONFIG", e.cfgPath)
-	t.Setenv("CODE_INDEX_DB", e.dbPath)
+	t.Setenv("CODE_INDEX_DB", "")
 	t.Setenv("HOME", tmp)
-	t.Chdir(tmp)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmp, "cache"))
+	t.Chdir(e.root)
 	return e
 }
 
@@ -83,7 +86,7 @@ func TestEndToEndWithoutEmbedder(t *testing.T) {
 	e := setup(t, "")
 
 	// before any index: a clear error, not a crash
-	if code, _, errw := cli(t, "search", "x"); code != 1 || !strings.Contains(errw, "no index") {
+	if code, _, errw := cli(t, "search", "x"); code != 1 || !strings.Contains(errw, "no index") || !strings.Contains(errw, "run `code-index index`") {
 		t.Fatalf("search before index: %d %q", code, errw)
 	}
 
@@ -167,7 +170,7 @@ func TestEndToEndWithoutEmbedder(t *testing.T) {
 
 	// stats and doctor
 	out = mustOK(t, "stats")
-	for _, want := range []string{"workspace:   " + e.root, "files:       6 (ok 6)", "powershell 6", "embedder:    none recorded"} {
+	for _, want := range []string{"workspace:   " + e.root, "database:    " + e.dbPath, "files:       6 (ok 6)", "powershell 6", "embedder:    none recorded"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stats lacks %q:\n%s", want, out)
 		}
@@ -238,9 +241,10 @@ func TestConfigCommand(t *testing.T) {
 	t.Setenv("PATH", tmp) // no language servers on PATH
 	t.Setenv("CODE_INDEX_CONFIG", filepath.Join(tmp, "cfg", "config.json"))
 	t.Setenv("MY_SECRET_KEY", "super-secret-value")
+	t.Chdir(tmp)
 
 	out := mustOK(t, "config")
-	if !strings.Contains(out, "not found: defaults and environment only") || !strings.Contains(out, `"enabled": false`) {
+	if !strings.Contains(out, `"embed": "default"`) || !strings.Contains(out, `"enabled": false`) {
 		t.Errorf("config without file:\n%s", out)
 	}
 	out = mustOK(t, "config", "init")
@@ -278,5 +282,96 @@ func TestUsageAndVersion(t *testing.T) {
 		if _, ok := commands[c]; !ok {
 			t.Errorf("command %s missing", c)
 		}
+	}
+}
+
+func gitRun(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return string(out)
+}
+
+func TestPerRepoDatabaseInGitRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	e := setup(t, "")
+	gitRun(t, e.root, "init", "-q")
+	os.WriteFile(filepath.Join(e.root, ".gitignore"), []byte("*.log\n"), 0o644)
+	gitignoreBefore, _ := os.ReadFile(filepath.Join(e.root, ".gitignore"))
+
+	// index from a subdirectory: the root is the directory with .git
+	t.Chdir(filepath.Join(e.root, "Widgets"))
+	out := mustOK(t, "index", "--quiet")
+	if !strings.Contains(out, "added .Wammy/ to ") || !strings.Contains(out, "5 file(s) of configured languages; indexed 5") {
+		t.Fatalf("index output: %s", out)
+	}
+	if _, err := os.Stat(e.dbPath); err != nil {
+		t.Fatalf("database not at <root>/.Wammy/code.sqlite: %v", err)
+	}
+	if fi, _ := os.Stat(filepath.Join(e.root, ".Wammy")); fi.Mode().Perm() != 0o700 {
+		t.Errorf(".Wammy mode = %v, want 0700", fi.Mode().Perm())
+	}
+	entries, _ := os.ReadDir(filepath.Join(e.root, ".Wammy"))
+	for _, en := range entries {
+		if strings.HasSuffix(en.Name(), "-wal") || strings.HasSuffix(en.Name(), "-shm") {
+			t.Errorf("%s left behind after the command exited", en.Name())
+		}
+	}
+	if st := gitRun(t, e.root, "status", "--short"); strings.Contains(st, ".Wammy") {
+		t.Errorf("git status lists .Wammy:\n%s", st)
+	}
+	if after, _ := os.ReadFile(filepath.Join(e.root, ".gitignore")); string(after) != string(gitignoreBefore) {
+		t.Error(".gitignore was modified")
+	}
+	// the second run finds it already ignored and prints nothing about it
+	if out := mustOK(t, "sweep", "--quiet"); strings.Contains(out, "added") {
+		t.Errorf("sweep: %s", out)
+	}
+	if out := mustOK(t, "index", "--quiet"); strings.Contains(out, "added") {
+		t.Errorf("second index: %s", out)
+	}
+	// search and show find the database from a subdirectory
+	if out := mustOK(t, "search", "Get-Widget"); !strings.Contains(out, "function Get-Widget  Widgets/Widgets.psm1:6") {
+		t.Errorf("search from subdirectory:\n%s", out)
+	}
+	if out := mustOK(t, "doctor"); !strings.Contains(out, "ok    git-ignore     .Wammy/ is ignored by git") || !strings.Contains(out, e.dbPath) {
+		t.Errorf("doctor:\n%s", out)
+	}
+	// the index never contains its own directory
+	if out := mustOK(t, "stats"); !strings.Contains(out, "files:       5 (ok 5)") {
+		t.Errorf("stats:\n%s", out)
+	}
+}
+
+func TestRepoConfigOverride(t *testing.T) {
+	e := setup(t, "")
+	os.MkdirAll(filepath.Join(e.root, ".Wammy"), 0o700)
+	repoCfg := filepath.Join(e.root, ".Wammy", "config.json")
+	os.WriteFile(repoCfg, []byte(`{"embed":{"provider":"ollama","model":"repo-model","enabled":false},"index":{"max_file_size":5}}`), 0o644)
+	out := mustOK(t, "config")
+	var c struct {
+		Sources map[string]string `json:"_sources"`
+		Embed   struct{ Model string }
+		Index   struct {
+			MaxFileSize int `json:"max_file_size"`
+		}
+		Languages map[string]any
+	}
+	if err := json.Unmarshal([]byte(out), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.Sources["embed"] != repoCfg || c.Sources["index"] != repoCfg || c.Sources["summarize"] != "default" || c.Sources["languages.powershell"] != e.cfgPath {
+		t.Errorf("sources = %v", c.Sources)
+	}
+	if c.Embed.Model != "repo-model" || c.Index.MaxFileSize != 5 || c.Languages["powershell"] == nil {
+		t.Errorf("merged config: %+v", c)
+	}
+	// the override applies to indexing: every fixture file is larger than 5 bytes
+	if out := mustOK(t, "index", "--quiet"); !strings.Contains(out, "0 file(s) of configured languages") || !strings.Contains(out, "skipped too large 5") {
+		t.Errorf("index with max_file_size 5: %s", out)
 	}
 }

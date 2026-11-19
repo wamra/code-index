@@ -14,6 +14,7 @@ import (
 	"github.com/wamra/code-index/internal/provider"
 	"github.com/wamra/code-index/internal/search"
 	"github.com/wamra/code-index/internal/store"
+	"github.com/wamra/code-index/internal/workspace"
 )
 
 func count(ctx context.Context, db *sql.DB, q string, args ...any) int {
@@ -100,11 +101,17 @@ func cmdDoctor(args []string, out, errw io.Writer) int {
 	}
 	ctx := context.Background()
 
-	cfg, cerr := loadConfig()
+	cfg, csrc, cerr := loadConfig(cwdRoot())
 	if cerr != nil {
 		add("FAIL", "config", "%v", cerr)
 	} else {
-		add("ok", "config", "%s (%d language(s))", configPath(), len(cfg.Languages))
+		files := map[string]bool{}
+		for _, f := range csrc {
+			if f != "default" {
+				files[f] = true
+			}
+		}
+		add("ok", "config", "%d language(s); files read: %s", len(cfg.Languages), joinKeys(files))
 	}
 
 	st, root, err := openExisting()
@@ -116,6 +123,15 @@ func cmdDoctor(args []string, out, errw io.Writer) int {
 	db := st.DB()
 	ver, _ := st.Meta(ctx, "schema_version")
 	add("ok", "index", "%s (schema %s)", st.Path(), ver)
+	if os.Getenv("CODE_INDEX_DB") != "" {
+		add("ok", "git-ignore", "CODE_INDEX_DB is set: the database is not under %s/", workspace.DirName)
+	} else if ig, known := workspace.GitIgnored(root); !known {
+		add("ok", "git-ignore", "%s/ not checked (%s is not a git repo, or git is unavailable)", workspace.DirName, root)
+	} else if ig {
+		add("ok", "git-ignore", "%s/ is ignored by git", workspace.DirName)
+	} else {
+		add("WARN", "git-ignore", "%s/ is NOT ignored by git; `code-index index` adds it to the repo's info/exclude", workspace.DirName)
+	}
 	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
 		add("FAIL", "workspace", "root %s is not accessible", root)
 	} else {
@@ -248,4 +264,11 @@ func printChecks(checks []check, out io.Writer) int {
 		}
 	}
 	return code
+}
+
+func joinKeys(m map[string]bool) string {
+	if len(m) == 0 {
+		return "none (defaults)"
+	}
+	return strings.Join(sortedKeys(m), ", ")
 }

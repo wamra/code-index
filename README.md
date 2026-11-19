@@ -61,12 +61,35 @@ entry:
 - `summarize`: parsed, not used yet.
 - `index.ignore`: `.gitignore`-style patterns on top of the `.gitignore` files
   of the workspace. `max_file_size` is in bytes.
-- Environment: `CODE_INDEX_CONFIG` (config file), `CODE_INDEX_DB` (database
-  file), `CODE_INDEX_EMBED_{PROVIDER,MODEL,BASE_URL}`.
+- Environment: `CODE_INDEX_CONFIG` (global config file), `CODE_INDEX_DB`
+  (database file), `CODE_INDEX_EMBED_{PROVIDER,MODEL,BASE_URL}`.
 
-The database lives outside the workspace:
-`~/Library/Caches/code-index/<workspace-id>/index.sqlite` on macOS,
-`$XDG_CACHE_HOME` or `~/.cache` on Linux, `%LOCALAPPDATA%` on Windows.
+### Per-repo override
+
+`<repo>/.Wammy/config.json` is merged over the global file section by section:
+`languages` per language key; `embed`, `summarize` and `index` are replaced as
+whole sections when the repo file has them. `code-index config` prints the
+effective configuration with a `_sources` map naming the file each section came
+from (or `default`).
+
+## Where the index lives
+
+Each repo has its own database at `<repo>/.Wammy/code.sqlite`. The repo root is
+the nearest ancestor of the target directory (the `PATH` argument, else the
+working directory) that contains `.git` (a directory, or a file in worktrees
+and submodules); outside a git repo it is the directory itself. Every command
+finds the database by walking up from the working directory, so `search` works
+from any subdirectory. `CODE_INDEX_DB` overrides the location.
+
+- `.Wammy/` is created with mode 0700 and never indexed.
+- In a git repo, `index` appends `.Wammy/` to the repo's `info/exclude` (the
+  real git dir, also for worktrees) unless git already ignores it, and prints a
+  line when it does. `.gitignore` is never edited. `doctor` reports whether
+  `.Wammy/` is ignored.
+- The WAL is checkpointed on exit, so `.Wammy` holds the database file alone
+  (plus `-wal`/`-shm` while a command runs) and a cloud-synced repo is safe.
+  Lock files sit next to it. The wasm compile cache lives in the user cache
+  directory (`code-index/wazero`), not in the repo.
 
 ## Commands
 

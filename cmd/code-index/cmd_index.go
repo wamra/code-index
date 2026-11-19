@@ -40,18 +40,22 @@ func cmdIndex(args []string, out, errw io.Writer) int {
 	if len(pos) == 1 {
 		target = pos[0]
 	}
-	root, err := realPath(target)
-	if err != nil {
-		return fail(errw, "index: %v", err)
-	}
-	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
 		return fail(errw, "index: %s is not a directory", target)
 	}
-	st, err := store.Open(workspace.DBPath(root, homeDir(), os.Getenv))
+	root := workspace.Root(target)
+	st, err := store.Open(workspace.DBPath(root, os.Getenv))
 	if err != nil {
 		return fail(errw, "index: open database: %v", err)
 	}
 	defer st.Close()
+	if os.Getenv("CODE_INDEX_DB") == "" {
+		if p, err := workspace.EnsureExcluded(root); err != nil {
+			fmt.Fprintf(errw, "index: could not exclude %s/ from git: %v\n", workspace.DirName, err)
+		} else if p != "" {
+			fmt.Fprintf(out, "added %s/ to %s\n", workspace.DirName, p)
+		}
+	}
 	return runIndex(st, root, *force, *doEmbed, *quiet, out, errw)
 }
 
@@ -72,7 +76,7 @@ func cmdSweep(args []string, out, errw io.Writer) int {
 }
 
 func runIndex(st *store.Store, root string, force, doEmbed, quiet bool, out, errw io.Writer) int {
-	cfg, err := loadConfig()
+	cfg, _, err := loadConfig(root)
 	if err != nil {
 		return fail(errw, "index: %v", err)
 	}

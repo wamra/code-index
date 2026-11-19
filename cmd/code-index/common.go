@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/wamra/code-index/internal/config"
 	"github.com/wamra/code-index/internal/provider"
@@ -21,19 +20,30 @@ func homeDir() string {
 	return h
 }
 
+// configPath is the global config file.
 func configPath() string { return config.Path(homeDir(), os.Getenv) }
 
-// loadConfig returns the effective (resolved, validated) configuration.
-func loadConfig() (config.Config, error) {
-	c, _, err := config.Load(configPath(), os.Getenv)
+// cwdRoot is the repo root of the working directory.
+func cwdRoot() string {
+	cwd, err := os.Getwd()
 	if err != nil {
-		return config.Config{}, err
+		cwd = "."
+	}
+	return workspace.Root(cwd)
+}
+
+// loadConfig returns the effective (resolved, validated) configuration for the
+// repo at root: the global file with <root>/.Wammy/config.json merged over it.
+func loadConfig(root string) (config.Config, config.Sources, error) {
+	c, src, err := config.LoadLayered(configPath(), config.RepoPath(root), os.Getenv)
+	if err != nil {
+		return config.Config{}, nil, err
 	}
 	c = c.Resolved()
 	if err := c.Validate(); err != nil {
-		return config.Config{}, fmt.Errorf("config %s: %w", configPath(), err)
+		return config.Config{}, nil, fmt.Errorf("config: %w", err)
 	}
-	return c, nil
+	return c, src, nil
 }
 
 // newEmbedder builds the configured embedder, or nil when embeddings are not
@@ -52,17 +62,14 @@ func newEmbedder(cfg config.Config, st *store.Store) (provider.Embedder, error) 
 	return provider.NewEmbedder(ec)
 }
 
-// openExisting opens the index of the workspace that contains the working
-// directory (or the one named by CODE_INDEX_DB) and returns its root.
+// openExisting opens the index of the repo that contains the working
+// directory (found by walking up to the nearest .git, or CODE_INDEX_DB) and
+// returns the repo root.
 func openExisting() (*store.Store, string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, "", err
-	}
-	root := workspace.Find(cwd, homeDir(), os.Getenv)
-	p := workspace.DBPath(root, homeDir(), os.Getenv)
+	root := cwdRoot()
+	p := workspace.DBPath(root, os.Getenv)
 	if _, err := os.Stat(p); err != nil {
-		return nil, "", fmt.Errorf("no index for %s (looked for %s); run `code-index index PATH` first", root, p)
+		return nil, "", fmt.Errorf("no index for %s (looked for %s); run `code-index index`", root, p)
 	}
 	st, err := store.Open(p)
 	if err != nil {
@@ -72,18 +79,6 @@ func openExisting() (*store.Store, string, error) {
 		root = r
 	}
 	return st, root, nil
-}
-
-// realPath resolves p to an absolute path with symlinks resolved.
-func realPath(p string) (string, error) {
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return "", err
-	}
-	if r, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = r
-	}
-	return abs, nil
 }
 
 func fail(errw io.Writer, format string, a ...any) int {

@@ -21,13 +21,9 @@ func cmdConfig(args []string, out, errw io.Writer) int {
 	path := configPath()
 	switch {
 	case len(pos) == 0:
-		c, found, err := config.Load(path, os.Getenv)
+		c, src, err := config.LoadLayered(path, config.RepoPath(cwdRoot()), os.Getenv)
 		if err != nil {
 			return fail(errw, "config: %v", err)
-		}
-		src := path + " (not found: defaults and environment only)"
-		if found {
-			src = path
 		}
 		if err := c.Resolved().Validate(); err != nil {
 			return fail(errw, "config: %v", err)
