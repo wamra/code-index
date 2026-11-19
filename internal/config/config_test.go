@@ -168,11 +168,51 @@ func TestDiscover(t *testing.T) {
 func TestEffectiveNeverPrintsKeys(t *testing.T) {
 	t.Setenv("MY_KEY", "sk-secret-value")
 	c, _, _ := Load(write(t, `{"embed":{"provider":"openai","base_url":"http://x","model":"m","api_key_env":"MY_KEY"}}`), os.Getenv)
-	out := string(Effective(c, "src", os.Getenv))
+	out := string(Effective(c, Sources{"embed": "x"}, os.Getenv))
 	if strings.Contains(out, "sk-secret-value") {
 		t.Fatal("the key value leaked into the effective config")
 	}
 	if !strings.Contains(out, `"_embed_api_key": "set"`) || !strings.Contains(out, "MY_KEY") {
 		t.Errorf("expected the variable name and its state:\n%s", out)
+	}
+}
+
+func TestLayeredMerge(t *testing.T) {
+	dir := t.TempDir()
+	g := filepath.Join(dir, "g.json")
+	r := filepath.Join(dir, "r.json")
+	os.WriteFile(g, []byte(`{"embed":{"provider":"ollama","model":"gm"},"index":{"max_file_size":10},
+		"languages":{"a":{"command":"ga","extensions":[".a"]},"b":{"command":"gb","extensions":[".b"]}}}`), 0o644)
+	os.WriteFile(r, []byte(`{"embed":{"provider":"openai","model":"rm","base_url":"http://r"},
+		"languages":{"b":{"command":"rb","extensions":[".b"]},"c":{"command":"rc","extensions":[".c"]}}}`), 0o644)
+	c, src, err := LoadLayered(g, r, env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := c.Resolved()
+	if res.Embed.Provider != "openai" || res.Embed.Model != "rm" {
+		t.Errorf("embed must be replaced as a whole: %+v", res.Embed)
+	}
+	if res.Index.MaxFileSize != 10 {
+		t.Errorf("index from global: %+v", res.Index)
+	}
+	if res.Languages["a"].Command != "ga" || res.Languages["b"].Command != "rb" || res.Languages["c"].Command != "rc" {
+		t.Errorf("languages merged per key: %+v", res.Languages)
+	}
+	want := Sources{"embed": r, "summarize": "default", "index": g, "languages.a": g, "languages.b": r, "languages.c": r}
+	for k, v := range want {
+		if src[k] != v {
+			t.Errorf("source[%s] = %q, want %q", k, src[k], v)
+		}
+	}
+	// a repo file without sections changes nothing; missing files are fine
+	c2, src2, err := LoadLayered(g, filepath.Join(dir, "none.json"), env(nil))
+	if err != nil || src2["embed"] != g || c2.Resolved().Embed.Model != "gm" {
+		t.Errorf("missing repo file: %v %v", err, src2)
+	}
+	// a bad repo file is reported with its path
+	os.WriteFile(r, []byte(`{"nope":1}`), 0o644)
+	if _, _, err := LoadLayered(g, r, env(nil)); err == nil || !strings.Contains(err.Error(), r) {
+		t.Errorf("bad repo file: %v", err)
 	}
 }

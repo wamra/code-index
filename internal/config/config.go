@@ -69,6 +69,31 @@ func Path(home string, getenv func(string) string) string {
 	return filepath.Join(home, ".config", "code-index", "config.json")
 }
 
+// readFile decodes one config file. sections names the top-level sections the
+// file contains. A missing file is not an error (found is false).
+func readFile(path string) (c Config, sections map[string]bool, found bool, err error) {
+	b, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+	case errors.Is(err, fs.ErrNotExist):
+		return Config{}, nil, false, nil
+	default:
+		return Config{}, nil, false, fmt.Errorf("config %s: %w", path, err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
+		return Config{}, nil, true, fmt.Errorf("config %s: %w", path, err)
+	}
+	var raw map[string]json.RawMessage
+	_ = json.Unmarshal(b, &raw)
+	sections = map[string]bool{}
+	for k := range raw {
+		sections[k] = true
+	}
+	return c, sections, true, nil
+}
+
 // Load reads the file at path (a missing file means defaults) and applies the
 // environment overrides. The result is NOT resolved: call Resolved for the
 // effective values. found reports whether the file existed.
@@ -76,25 +101,76 @@ func Path(home string, getenv func(string) string) string {
 // Environment, applied over the file: CODE_INDEX_EMBED_{PROVIDER,MODEL,BASE_URL}
 // and CODE_INDEX_SUMMARIZE_{PROVIDER,MODEL,BASE_URL}.
 func Load(path string, getenv func(string) string) (c Config, found bool, err error) {
-	b, err := os.ReadFile(path)
-	switch {
-	case err == nil:
-		found = true
-		dec := json.NewDecoder(bytes.NewReader(b))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&c); err != nil {
-			return Config{}, true, fmt.Errorf("config %s: %w", path, err)
-		}
-	case errors.Is(err, fs.ErrNotExist):
-	default:
-		return Config{}, false, fmt.Errorf("config %s: %w", path, err)
+	c, _, found, err = readFile(path)
+	if err != nil {
+		return Config{}, found, err
 	}
-	applyEnv(&c, getenv)
+	finish(&c, getenv)
+	return c, found, nil
+}
+
+// Sources says which file each section of a layered config came from:
+// keys "embed", "summarize", "index" and "languages.<name>"; the value is a
+// file path, or "default" when no file set it.
+type Sources map[string]string
+
+// RepoPath is the per-repo override file: <root>/.Wammy/config.json.
+func RepoPath(root string) string { return filepath.Join(root, ".Wammy", "config.json") }
+
+// LoadLayered reads the global file and the optional per-repo override and
+// merges them section by section: "languages" per language key, "embed",
+// "summarize" and "index" replaced as whole sections when the repo file has
+// them. Environment overrides apply last.
+func LoadLayered(globalPath, repoPath string, getenv func(string) string) (Config, Sources, error) {
+	src := Sources{"embed": "default", "summarize": "default", "index": "default"}
+	g, gsec, gfound, err := readFile(globalPath)
+	if err != nil {
+		return Config{}, nil, err
+	}
+	c := Config{Languages: map[string]Language{}}
+	if gfound {
+		for _, sec := range []string{"embed", "summarize", "index"} {
+			if gsec[sec] {
+				src[sec] = globalPath
+			}
+		}
+		c.Embed, c.Summarize, c.Index = g.Embed, g.Summarize, g.Index
+		for n, l := range g.Languages {
+			c.Languages[n] = l
+			src["languages."+n] = globalPath
+		}
+	}
+	if repoPath != "" {
+		r, rsec, rfound, err := readFile(repoPath)
+		if err != nil {
+			return Config{}, nil, err
+		}
+		if rfound {
+			if rsec["embed"] {
+				c.Embed, src["embed"] = r.Embed, repoPath
+			}
+			if rsec["summarize"] {
+				c.Summarize, src["summarize"] = r.Summarize, repoPath
+			}
+			if rsec["index"] {
+				c.Index, src["index"] = r.Index, repoPath
+			}
+			for n, l := range r.Languages {
+				c.Languages[n] = l
+				src["languages."+n] = repoPath
+			}
+		}
+	}
+	finish(&c, getenv)
+	return c, src, nil
+}
+
+func finish(c *Config, getenv func(string) string) {
+	applyEnv(c, getenv)
 	if c.Embed.Enabled == nil {
 		on := c.Embed.Provider != "" || c.Embed.Model != ""
 		c.Embed.Enabled = &on
 	}
-	return c, found, nil
 }
 
 func applyEnv(c *Config, getenv func(string) string) {
@@ -250,8 +326,8 @@ func (c Config) out(comment string) out {
 
 // Effective renders the resolved config as JSON. API keys are never read:
 // only the NAME of the key variable is shown, with whether it is set. src
-// describes where the file was looked up.
-func Effective(c Config, src string, getenv func(string) string) []byte {
+// says which file each section came from.
+func Effective(c Config, src Sources, getenv func(string) string) []byte {
 	r := c.Resolved()
 	state := func(name string) string {
 		switch {
@@ -263,7 +339,7 @@ func Effective(c Config, src string, getenv func(string) string) []byte {
 		return "unset"
 	}
 	b, _ := json.MarshalIndent(struct {
-		Source string `json:"_source"`
+		Sources Sources `json:"_sources"`
 		out
 		EmbedKey     string `json:"_embed_api_key"`
 		SummarizeKey string `json:"_summarize_api_key"`
