@@ -56,8 +56,7 @@ The binary is self-contained (no CGO).
 
 macOS is the development platform. Linux and Windows run `go vet` and the test
 suite in CI (`.github/workflows/ci.yml`); the tests use a fake language server
-and a fake embedding server; real language servers are exercised on macOS and
-by the Docker end-to-end test on Linux (see below). The portability measures: SQLite uses a rollback journal on Windows and WAL
+and a fake embedding server. The portability measures: SQLite uses a rollback journal on Windows and WAL
 elsewhere, file URIs and drive letters are handled for Windows, CRLF sources
 are accepted, server commands resolve through PATH and PATHEXT (`.cmd` shims),
 and paths stored in the index and shown in output always use forward slashes.
@@ -160,32 +159,12 @@ go test ./...
 The tests use a fake language server (the test binary itself) and a fake
 Ollama HTTP server, so they need neither a real language server nor a network.
 
-## Docker end-to-end test
+## Smoke test
 
-`scripts/test-docker.sh` runs the whole product on a clean Linux machine: a
-fresh HOME and Claude Code config, the real `scripts/install.sh`, real
-`bash-language-server` and PowerShell Editor Services, `claude plugin validate`
-and `claude plugin test`. It needs Docker only.
-
-```sh
-scripts/test-docker.sh [--pwsh-plugin DIR] [--no-build] [--shell]
-```
-
-- It builds `code-index-test:latest` from `test/docker/Dockerfile` (Debian, Go,
-  Node LTS, Claude Code from the official native installer,
-  `bash-language-server`, `shellcheck`, PowerShell 7, a non-root user). The image
-  does not contain the repo, so it is reusable; `--no-build` reuses it.
-- The repo is mounted read-only at `/src`; `test/docker/e2e.sh` runs on a copy and
-  prints `PASS`, `FAIL` or `SKIP <reason>` per step, exiting non-zero on any `FAIL`.
-- `--pwsh-plugin DIR` mounts a Claude Code plugin that ships
-  `scripts/start-pses.ps1` (it downloads PowerShell Editor Services on first
-  run) and enables the PowerShell steps; without it they are skipped.
-- Embeddings are tested when Ollama with `embeddinggemma` answers at
-  `host.docker.internal:11434`. The model-in-the-loop step (`claude -p` with the
-  installed plugin) runs only when `ANTHROPIC_API_KEY` or
-  `CLAUDE_CODE_OAUTH_TOKEN` is already set in your shell; the script passes them
-  through and never stores them.
-- `--shell` opens a shell in the container for debugging.
+`scripts/smoke.sh` checks the consumer path on a clean Docker image that has
+only Claude Code: add this repo as a marketplace, install the
+`code-index-search` plugin, and, when `ANTHROPIC_API_KEY` or
+`CLAUDE_CODE_OAUTH_TOKEN` is set, call the search tool through `claude -p`.
 
 ## License
 
