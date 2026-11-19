@@ -1,0 +1,3 @@
+# Keep text files LF on every platform: the skill is embedded in the binary
+# and the fixtures are hashed, so a CRLF checkout would change both.
+* text=auto eol=lf
