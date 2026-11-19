@@ -18,11 +18,44 @@ an LSP proxy are planned.
 
 ## Install
 
-```sh
-go build -o code-index ./cmd/code-index
+Building from source needs Go 1.24.1 or newer. Semantic search needs Ollama
+with `embeddinggemma`, or another provider (see Configure). Without one, search
+falls back to names and full text.
+
+**macOS, Linux:**
+
+```
+scripts/install.sh              # builds, installs to ~/.local/bin, writes a starter config, adds the skill, runs doctor
+cd <repo> && code-index index   # index a repo
 ```
 
-Go 1.24 or later. The binary is self-contained (no CGO).
+Flags: `--bin-dir DIR`, `--no-skill`. The installer writes the global config
+only when none exists.
+
+**Windows (PowerShell):** `scripts\install.ps1` (`-BinDir`, `-NoSkill`).
+
+**By hand:** `go build -o code-index ./cmd/code-index`, then
+`code-index config init` and `code-index install-skill`.
+
+**Release archives:** `scripts/build-release.sh` writes archives for macOS,
+Linux and Windows (amd64, arm64) with checksums into `dist/`.
+
+`code-index install-skill [--dir SKILLS_DIR]` writes the `code-search` skill to
+`~/.claude/skills/code-search/SKILL.md`; it tells Claude Code when to use
+`code-index search` and `show`.
+
+The binary is self-contained (no CGO).
+
+## Platforms
+
+macOS is the development platform and is tested. Linux and Windows are
+build-verified only (`CGO_ENABLED=0` cross-builds and `go vet` for both) and
+untested at runtime until CI runs: the repository has no remote yet, so
+`.github/workflows/ci.yml` (vet and test on Linux and Windows) has not run. The
+portability measures: SQLite uses a rollback journal on Windows and WAL
+elsewhere, file URIs and drive letters are handled for Windows, CRLF sources
+are accepted, server commands resolve through PATH and PATHEXT (`.cmd` shims),
+and paths stored in the index and shown in output always use forward slashes.
 
 ## Configure
 
@@ -101,6 +134,7 @@ code-index show SYMBOL [--source] [--json]    qualified name, name or path:line
 code-index stats
 code-index doctor
 code-index config [init [--force]]
+code-index install-skill [--dir SKILLS_DIR]
 code-index version
 ```
 
