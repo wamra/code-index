@@ -4,7 +4,7 @@ A Claude Code mod that puts the `code-index` binary inside the session. It gives
 
 - `search` tool: searches the current repo's code index (`<repo>/.Wammy/code.sqlite`) for functions, classes, methods and files. Filters: mode, kind, lang, path, k. `repo` points it at another repo.
 - `show` tool: shows one symbol (kind, file and line range, signature, doc comment, children), optionally with its source lines.
-- `/code <query>`: prints search hits. `/code show <symbol>` shows a symbol. `/code index` indexes or re-indexes this repo. `/code` alone prints index stats.
+- `/code <query>`: prints search hits. `/code show <symbol>` shows a symbol. `/code index` indexes or re-indexes this repo and embeds new chunks when an embedder is configured. `/code` alone prints index stats.
 
 Setup: install the `code-index` binary and make sure it is on PATH, or set the plugin option `binary` to its full path. Semantic search needs an embedding provider in the code-index config; otherwise plain-language queries fall back to full-text search.
 

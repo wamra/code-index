@@ -146,7 +146,8 @@ export const register: Register = (on, options) => {
       return { text: clip(r.text.trim() || 'No output.', MAX_TEXT) }
     }
     if (args === 'index') {
-      const r = await run($, bin, ['index'], undefined, 600_000)
+      // --embed is a no-op with a note when no embedder is configured.
+      const r = await run($, bin, ['index', '--embed'], undefined, 600_000)
       return { text: clip(r.text.trim() || 'No output.', MAX_TEXT) }
     }
     const m = /^show\s+(.+)$/.exec(args)
