@@ -30,7 +30,8 @@ type walkStats struct {
 
 // walk lists the files under root that belong to a configured language,
 // honoring .gitignore files (root and nested) and the index.ignore globs.
-// Symbolic links are not followed. .git is always skipped.
+// Symbolic links are not followed. .git and .Wammy (the index itself) are
+// always skipped, whatever the ignore files say.
 func walk(root string, cfg config.Config) ([]candidate, walkStats, error) {
 	var out []candidate
 	var st walkStats
@@ -59,7 +60,7 @@ func walk(root string, cfg config.Config) ([]candidate, walkStats, error) {
 				continue
 			}
 			if e.IsDir() {
-				if name == ".git" || set.Ignored(rel, true) {
+				if name == ".git" || name == ".Wammy" || set.Ignored(rel, true) {
 					continue
 				}
 				if err := visit(rel, set); err != nil {

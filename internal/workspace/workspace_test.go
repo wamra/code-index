@@ -2,62 +2,118 @@ package workspace
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestIDAndDBPath(t *testing.T) {
-	root := t.TempDir()
-	id := ID(root)
-	if len(id) != 16 {
-		t.Fatalf("id %q", id)
+func noenv(string) string { return "" }
+
+func realTemp(t *testing.T) string {
+	r, _ := filepath.EvalSymlinks(t.TempDir())
+	return r
+}
+
+func TestRootAndDBPath(t *testing.T) {
+	base := realTemp(t)
+	sub := filepath.Join(base, "repo", "a", "b")
+	os.MkdirAll(sub, 0o755)
+	repo := filepath.Join(base, "repo")
+	if got := Root(sub); got != sub {
+		t.Errorf("no .git: Root = %s, want the directory itself", got)
 	}
-	link := filepath.Join(t.TempDir(), "link")
-	if err := os.Symlink(root, link); err != nil {
-		t.Fatal(err)
+	os.Mkdir(filepath.Join(repo, ".git"), 0o755)
+	if got := Root(sub); got != repo {
+		t.Errorf("Root = %s, want %s", got, repo)
 	}
-	if ID(link) != id {
-		t.Error("a symlink to the root must give the same id (real path)")
+	// a .git FILE (worktree or submodule) also marks a root
+	wt := filepath.Join(base, "wt")
+	os.MkdirAll(filepath.Join(wt, "x"), 0o755)
+	os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: /elsewhere\n"), 0o644)
+	if got := Root(filepath.Join(wt, "x")); got != wt {
+		t.Errorf("Root with .git file = %s, want %s", got, wt)
 	}
-	if ID(t.TempDir()) == id {
-		t.Error("different roots must differ")
+	link := filepath.Join(base, "link")
+	os.Symlink(repo, link)
+	if got := Root(link); got != repo {
+		t.Errorf("symlink: %s", got)
 	}
-	env := func(k string) string {
+	if got := DBPath(repo, noenv); got != filepath.Join(repo, ".Wammy", "code.sqlite") {
+		t.Errorf("db path = %s", got)
+	}
+	if got := DBPath(repo, func(k string) string {
 		if k == "CODE_INDEX_DB" {
-			return "/custom/db.sqlite"
+			return "/custom.sqlite"
 		}
 		return ""
-	}
-	if got := DBPath(root, "/home/u", env); got != "/custom/db.sqlite" {
-		t.Errorf("CODE_INDEX_DB ignored: %s", got)
-	}
-	got := DBPath(root, "/home/u", func(string) string { return "" })
-	if filepath.Base(got) != "index.sqlite" || filepath.Base(filepath.Dir(got)) != id {
-		t.Errorf("db path = %s", got)
+	}); got != "/custom.sqlite" {
+		t.Errorf("override = %s", got)
 	}
 }
 
-func TestFindWalksUpToIndexedAncestor(t *testing.T) {
-	home := t.TempDir()
-	cache := t.TempDir()
-	env := func(k string) string {
-		if k == "XDG_CACHE_HOME" {
-			return cache
+func gitInit(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+}
+
+func TestEnsureExcluded(t *testing.T) {
+	repo := realTemp(t)
+	gitInit(t, repo)
+	os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("*.log\n"), 0o644)
+	before, _ := os.ReadFile(filepath.Join(repo, ".gitignore"))
+	if ig, known := GitIgnored(repo); !known || ig {
+		t.Fatalf("before: ignored=%v known=%v", ig, known)
+	}
+	p, err := EnsureExcluded(repo)
+	if err != nil || p == "" {
+		t.Fatalf("EnsureExcluded = %q %v", p, err)
+	}
+	if b, _ := os.ReadFile(p); !strings.Contains(string(b), ".Wammy/\n") {
+		t.Errorf("exclude file: %q", b)
+	}
+	if after, _ := os.ReadFile(filepath.Join(repo, ".gitignore")); string(after) != string(before) {
+		t.Error(".gitignore must not be touched")
+	}
+	if ig, _ := GitIgnored(repo); !ig {
+		t.Error("now ignored")
+	}
+	if p2, _ := EnsureExcluded(repo); p2 != "" {
+		t.Error("second call must do nothing")
+	}
+}
+
+func TestEnsureExcludedWorktreeAndNonRepo(t *testing.T) {
+	if got, err := EnsureExcluded(realTemp(t)); got != "" || err != nil {
+		t.Errorf("non-repo: %q %v", got, err)
+	}
+	main := realTemp(t)
+	gitInit(t, main)
+	cmds := [][]string{
+		{"-C", main, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "x"},
+		{"-C", main, "worktree", "add", "-q", filepath.Join(main, "..", filepath.Base(main)+"-wt")},
+	}
+	for _, c := range cmds {
+		if out, err := exec.Command("git", c...).CombinedOutput(); err != nil {
+			t.Skipf("git %v: %v %s", c, err, out)
 		}
-		return ""
 	}
-	root := t.TempDir()
-	sub := filepath.Join(root, "a", "b")
-	os.MkdirAll(sub, 0o755)
-	root, _ = filepath.EvalSymlinks(root)
-	sub = filepath.Join(root, "a", "b")
-	if got := Find(sub, home, env); got != sub {
-		t.Errorf("without an index, Find = %s, want the directory itself", got)
+	wt := filepath.Join(filepath.Dir(main), filepath.Base(main)+"-wt")
+	t.Cleanup(func() { os.RemoveAll(wt) })
+	wt, _ = filepath.EvalSymlinks(wt)
+	p, err := EnsureExcluded(wt)
+	if err != nil || p == "" {
+		t.Fatalf("worktree: %q %v", p, err)
 	}
-	db := DBPath(root, home, env)
-	os.MkdirAll(filepath.Dir(db), 0o755)
-	os.WriteFile(db, nil, 0o644)
-	if got := Find(sub, home, env); got != root {
-		t.Errorf("Find = %s, want %s", got, root)
+	if st, err := os.Stat(filepath.Join(wt, ".git")); err != nil || st.IsDir() {
+		t.Fatal("expected a .git file in the worktree")
+	}
+	if ig, _ := GitIgnored(wt); !ig {
+		t.Error("worktree: .Wammy/ should now be ignored")
 	}
 }

@@ -71,3 +71,15 @@ func TestWalkSizeLimitAndSymlinks(t *testing.T) {
 		t.Errorf("walk = %s tooLarge=%d (symlinks must be skipped)", rels(got), st.TooLarge)
 	}
 }
+
+func TestWalkNeverEntersWammy(t *testing.T) {
+	root := tree(t, map[string]string{"a.sh": "a", ".Wammy/x.sh": "index dir", "sub/.Wammy/y.sh": "nested"})
+	os.WriteFile(filepath.Join(root, ".gitignore"), []byte("!.Wammy\n!.Wammy/**\n"), 0o644)
+	got, _, err := walk(root, cfgFor([]string{"zzz"}, 1<<20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rels(got) != "a.sh" {
+		t.Errorf("walk = %s", rels(got))
+	}
+}

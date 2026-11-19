@@ -36,11 +36,16 @@ func baseConfig() wazero.RuntimeConfig {
 var cacheOnce sync.Once
 
 // setupCompilationCache points the wazero runtime at an on-disk compilation
-// cache (<db dir>/wazero-cache) so the sqlite wasm is compiled once, not on
-// every process start. Failures are non-fatal.
-func setupCompilationCache(dbPath string) {
+// cache in the user cache dir (<cache>/code-index/wazero), never inside a repo,
+// so the sqlite wasm is compiled once, not on every process start. Failures
+// are non-fatal.
+func setupCompilationCache() {
 	cacheOnce.Do(func() {
-		dir := filepath.Join(filepath.Dir(dbPath), "wazero-cache")
+		base, err := os.UserCacheDir()
+		if err != nil {
+			return
+		}
+		dir := filepath.Join(base, "code-index", "wazero")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "code-index: compilation cache disabled: %v\n", err)
 			return
@@ -70,10 +75,10 @@ func dsn(path string, q url.Values) string {
 
 // Open opens (creating if needed) the index at path and applies the schema.
 func Open(path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	setupCompilationCache(path)
+	setupCompilationCache()
 	q := url.Values{}
 	q.Add("_pragma", "busy_timeout(30000)")
 	q.Add("_pragma", "journal_mode(WAL)")
@@ -94,8 +99,13 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db, path: path}, nil
 }
 
-// Close closes the database.
-func (s *Store) Close() error { return s.db.Close() }
+// Close folds the WAL into the main file (PRAGMA wal_checkpoint(TRUNCATE)) so
+// the database file is complete on its own, then closes the database. A busy
+// checkpoint (another process has it open) is not an error.
+func (s *Store) Close() error {
+	_, _ = s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	return s.db.Close()
+}
 
 // Path returns the database file path given to Open.
 func (s *Store) Path() string { return s.path }
