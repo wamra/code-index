@@ -35,11 +35,12 @@ func TestRootAndDBPath(t *testing.T) {
 		t.Errorf("Root with .git file = %s, want %s", got, wt)
 	}
 	link := filepath.Join(base, "link")
-	os.Symlink(repo, link)
-	if got := Root(link); got != repo {
-		t.Errorf("symlink: %s", got)
+	if err := os.Symlink(repo, link); err == nil { // may need privileges on Windows
+		if got := Root(link); got != repo {
+			t.Errorf("symlink: %s", got)
+		}
 	}
-	if got := DBPath(repo, noenv); got != filepath.Join(repo, ".Wammy", "code.sqlite") {
+	if got := DBPath(repo, noenv); got != filepath.Join(repo, ".Wammy", "code.sqlite") { // native separators on disk
 		t.Errorf("db path = %s", got)
 	}
 	if got := DBPath(repo, func(k string) string {
@@ -115,5 +116,19 @@ func TestEnsureExcludedWorktreeAndNonRepo(t *testing.T) {
 	}
 	if ig, _ := GitIgnored(wt); !ig {
 		t.Error("worktree: .Wammy/ should now be ignored")
+	}
+}
+
+func TestFindIndexedNonGit(t *testing.T) {
+	base := realTemp(t)
+	sub := filepath.Join(base, "a", "b")
+	os.MkdirAll(sub, 0o755)
+	if got := FindIndexed(sub); got != sub {
+		t.Errorf("no index anywhere: %s", got)
+	}
+	os.MkdirAll(filepath.Join(base, "a", DirName), 0o700)
+	os.WriteFile(filepath.Join(base, "a", DirName, "code.sqlite"), nil, 0o600)
+	if got := FindIndexed(sub); got != filepath.Join(base, "a") {
+		t.Errorf("FindIndexed = %s", got)
 	}
 }

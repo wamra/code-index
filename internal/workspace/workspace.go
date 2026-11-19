@@ -36,6 +36,24 @@ func Root(dir string) string {
 	}
 }
 
+// FindIndexed is Root for commands that read an existing index: in a git repo
+// it is the same, outside one it is the nearest ancestor of dir that already
+// has a .Wammy/code.sqlite (so a non-git workspace works from its subdirectories).
+func FindIndexed(dir string) string {
+	r := Root(dir)
+	if isGitRepo(r) {
+		return r
+	}
+	for d := r; ; d = filepath.Dir(d) {
+		if _, err := os.Stat(filepath.Join(d, DirName, "code.sqlite")); err == nil {
+			return d
+		}
+		if filepath.Dir(d) == d {
+			return r
+		}
+	}
+}
+
 // DBPath is the database for root: $CODE_INDEX_DB, else <root>/.Wammy/code.sqlite.
 func DBPath(root string, getenv func(string) string) string {
 	if p := getenv("CODE_INDEX_DB"); p != "" {
@@ -85,6 +103,7 @@ func EnsureExcluded(root string) (string, error) {
 	if p == "" {
 		return "", nil
 	}
+	p = filepath.FromSlash(p) // git prints forward slashes, also on Windows
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(root, p)
 	}

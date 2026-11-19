@@ -23,13 +23,14 @@ func homeDir() string {
 // configPath is the global config file.
 func configPath() string { return config.Path(homeDir(), os.Getenv) }
 
-// cwdRoot is the repo root of the working directory.
+// cwdRoot is the repo root of the working directory (for a non-git directory,
+// the nearest ancestor that already has an index).
 func cwdRoot() string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "."
 	}
-	return workspace.Root(cwd)
+	return workspace.FindIndexed(cwd)
 }
 
 // loadConfig returns the effective (resolved, validated) configuration for the
