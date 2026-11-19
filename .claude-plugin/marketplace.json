@@ -1,0 +1,8 @@
+{
+  "name": "code-index",
+  "owner": { "name": "wamra" },
+  "metadata": { "description": "Claude Code mods for the code-index binary" },
+  "plugins": [
+    { "name": "code-index-search", "source": "./plugins/code-index-search", "description": "Search and show tools for the model over a repo's code index, and a /code command." }
+  ]
+}

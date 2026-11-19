@@ -25,14 +25,14 @@ falls back to names and full text.
 **macOS, Linux:**
 
 ```
-scripts/install.sh              # builds, installs to ~/.local/bin, writes a starter config, adds the skill, runs doctor
+scripts/install.sh              # builds, installs to ~/.local/bin, writes a starter config, adds the skill and the mod, runs doctor
 cd <repo> && code-index index   # index a repo
 ```
 
-Flags: `--bin-dir DIR`, `--no-skill`. The installer writes the global config
+Flags: `--bin-dir DIR`, `--no-skill`, `--no-mod`. The installer writes the global config
 only when none exists.
 
-**Windows (PowerShell):** `scripts\install.ps1` (`-BinDir`, `-NoSkill`).
+**Windows (PowerShell):** `scripts\install.ps1` (`-BinDir`, `-NoSkill`, `-NoMod`).
 
 **By hand:** `go build -o code-index ./cmd/code-index`, then
 `code-index config init` and `code-index install-skill`.
@@ -43,6 +43,12 @@ Linux and Windows (amd64, arm64) with checksums into `dist/`.
 `code-index install-skill [--dir SKILLS_DIR]` writes the `code-search` skill to
 `~/.claude/skills/code-search/SKILL.md`; it tells Claude Code when to use
 `code-index search` and `show`.
+
+**Tools inside Claude Code:** the installer also registers this checkout as a
+plugin marketplace and installs the `code-index-search` mod: `search` and
+`show` tools the model calls directly, and a `/code` command
+([plugins/code-index-search](plugins/code-index-search/README.md)). It is
+skipped when `claude` is not on PATH. Restart Claude Code afterwards.
 
 The binary is self-contained (no CGO).
 
