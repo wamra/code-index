@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -77,7 +78,9 @@ func setup(t *testing.T, embedURL string) env {
 	t.Setenv("CODE_INDEX_CONFIG", e.cfgPath)
 	t.Setenv("CODE_INDEX_DB", "")
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmp, "cache"))
+	t.Setenv("LocalAppData", filepath.Join(tmp, "localappdata"))
 	t.Chdir(e.root)
 	return e
 }
@@ -238,6 +241,7 @@ func TestEndToEndWithEmbedder(t *testing.T) {
 func TestConfigCommand(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
 	t.Setenv("PATH", tmp) // no language servers on PATH
 	t.Setenv("CODE_INDEX_CONFIG", filepath.Join(tmp, "cfg", "config.json"))
 	t.Setenv("MY_SECRET_KEY", "super-secret-value")
@@ -278,7 +282,7 @@ func TestUsageAndVersion(t *testing.T) {
 	if out := mustOK(t, "version"); !strings.HasPrefix(out, "code-index ") {
 		t.Errorf("version: %q", out)
 	}
-	for _, c := range []string{"index", "sweep", "search", "show", "stats", "doctor", "config", "version"} {
+	for _, c := range []string{"index", "sweep", "search", "show", "stats", "doctor", "config", "install-skill", "version"} {
 		if _, ok := commands[c]; !ok {
 			t.Errorf("command %s missing", c)
 		}
@@ -312,7 +316,7 @@ func TestPerRepoDatabaseInGitRepo(t *testing.T) {
 	if _, err := os.Stat(e.dbPath); err != nil {
 		t.Fatalf("database not at <root>/.Wammy/code.sqlite: %v", err)
 	}
-	if fi, _ := os.Stat(filepath.Join(e.root, ".Wammy")); fi.Mode().Perm() != 0o700 {
+	if fi, _ := os.Stat(filepath.Join(e.root, ".Wammy")); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700 {
 		t.Errorf(".Wammy mode = %v, want 0700", fi.Mode().Perm())
 	}
 	entries, _ := os.ReadDir(filepath.Join(e.root, ".Wammy"))
@@ -373,5 +377,36 @@ func TestRepoConfigOverride(t *testing.T) {
 	// the override applies to indexing: every fixture file is larger than 5 bytes
 	if out := mustOK(t, "index", "--quiet"); !strings.Contains(out, "0 file(s) of configured languages") || !strings.Contains(out, "skipped too large 5") {
 		t.Errorf("index with max_file_size 5: %s", out)
+	}
+}
+
+func TestInstallSkill(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	want := filepath.Join(tmp, ".claude", "skills", "code-search", "SKILL.md")
+	if out := mustOK(t, "install-skill", "--dry-run"); !strings.Contains(out, want) {
+		t.Errorf("dry run: %s", out)
+	}
+	if _, err := os.Stat(want); err == nil {
+		t.Fatal("dry run wrote the file")
+	}
+	if out := mustOK(t, "install-skill"); !strings.Contains(out, "skill installed: "+want) {
+		t.Errorf("install: %s", out)
+	}
+	b, err := os.ReadFile(want)
+	if err != nil || !strings.HasPrefix(string(b), "---\nname: code-search\n") {
+		t.Fatalf("skill file: %v %.60q", err, b)
+	}
+	// only documented commands: every code-index subcommand named in the skill exists
+	for _, m := range regexp.MustCompile("code-index ([a-z-]+)").FindAllStringSubmatch(string(b), -1) {
+		if _, ok := commands[m[1]]; !ok {
+			t.Errorf("skill mentions unknown command %q", m[1])
+		}
+	}
+	custom := filepath.Join(tmp, "elsewhere")
+	mustOK(t, "install-skill", "--dir", custom)
+	if _, err := os.Stat(filepath.Join(custom, "code-search", "SKILL.md")); err != nil {
+		t.Error(err)
 	}
 }

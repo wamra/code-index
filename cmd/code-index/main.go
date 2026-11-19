@@ -35,14 +35,15 @@ var commands map[string]command
 
 func init() {
 	commands = map[string]command{
-		"index":   {cmdIndex, "index [PATH] [--embed] [--force] [--quiet]"},
-		"sweep":   {cmdSweep, "sweep [--embed] [--force] [--quiet]"},
-		"search":  {cmdSearch, "search QUERY [--mode auto|vector|fts|hybrid] [--kind KIND] [--lang LANG] [--path SUBSTR] [--k 10] [--json]"},
-		"show":    {cmdShow, "show SYMBOL [--source] [--json]   (SYMBOL: qualified name, name or path:line)"},
-		"stats":   {cmdStats, "stats"},
-		"doctor":  {cmdDoctor, "doctor"},
-		"config":  {cmdConfig, "config [init [--force]]"},
-		"version": {cmdVersion, "version"},
+		"index":         {cmdIndex, "index [PATH] [--embed] [--force] [--quiet]"},
+		"sweep":         {cmdSweep, "sweep [--embed] [--force] [--quiet]"},
+		"search":        {cmdSearch, "search QUERY [--mode auto|vector|fts|hybrid] [--kind KIND] [--lang LANG] [--path SUBSTR] [--k 10] [--json]"},
+		"show":          {cmdShow, "show SYMBOL [--source] [--json]   (SYMBOL: qualified name, name or path:line)"},
+		"stats":         {cmdStats, "stats"},
+		"doctor":        {cmdDoctor, "doctor"},
+		"config":        {cmdConfig, "config [init [--force]]"},
+		"install-skill": {cmdInstallSkill, "install-skill [--dir SKILLS_DIR] [--dry-run]   (writes the code-search skill, default ~/.claude/skills)"},
+		"version":       {cmdVersion, "version"},
 	}
 }
 
