@@ -26,7 +26,7 @@ if (-not $NoMod) {
   if (Get-Command claude -ErrorAction SilentlyContinue) {
     claude plugin marketplace add $root
     if ($LASTEXITCODE -ne 0) { claude plugin marketplace update code-index }
-    claude plugin install code-index-search@code-index
+    claude plugin install code-index-search@code-index --config "binary=$exe"
     Write-Host 'Restart Claude Code to load the search and show tools and /code.'
   } else {
     Write-Host 'NOTE: claude is not on PATH; skipped the code-index-search mod.'

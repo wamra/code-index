@@ -46,7 +46,7 @@ if [ "$MOD" = 1 ]; then
     # Registering the checkout as a marketplace is repeatable: an existing
     # entry is refreshed instead.
     claude plugin marketplace add "$ROOT" || claude plugin marketplace update code-index
-    claude plugin install code-index-search@code-index
+    claude plugin install code-index-search@code-index --config "binary=$BIN_DIR/code-index"
     echo "restart Claude Code to load the search and show tools and /code"
   else
     echo "NOTE: claude is not on PATH; skipped the code-index-search mod (see plugins/code-index-search/README.md)."
