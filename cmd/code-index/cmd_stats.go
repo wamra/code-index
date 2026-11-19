@@ -1,0 +1,251 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+
+	"github.com/wamra/code-index/internal/embed"
+	"github.com/wamra/code-index/internal/provider"
+	"github.com/wamra/code-index/internal/search"
+	"github.com/wamra/code-index/internal/store"
+)
+
+func count(ctx context.Context, db *sql.DB, q string, args ...any) int {
+	var n int
+	_ = db.QueryRowContext(ctx, q, args...).Scan(&n)
+	return n
+}
+
+// breakdown renders "a 3, b 2" from a two-column (label, n) query.
+func breakdown(ctx context.Context, db *sql.DB, q string) string {
+	rows, err := db.QueryContext(ctx, q)
+	if err != nil {
+		return err.Error()
+	}
+	defer rows.Close()
+	var parts []string
+	for rows.Next() {
+		var l string
+		var n int
+		if rows.Scan(&l, &n) == nil {
+			parts = append(parts, fmt.Sprintf("%s %d", l, n))
+		}
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func cmdStats(args []string, out, errw io.Writer) int {
+	fs := newFlags("stats", errw)
+	if _, err := parseInterspersed(fs, args); err != nil {
+		return 2
+	}
+	st, root, err := openExisting()
+	if err != nil {
+		return fail(errw, "stats: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	db := st.DB()
+	size := int64(0)
+	if fi, err := os.Stat(st.Path()); err == nil {
+		size = fi.Size()
+	}
+	fmt.Fprintf(out, "workspace:   %s\n", root)
+	fmt.Fprintf(out, "database:    %s (%.1f KiB)\n", st.Path(), float64(size)/1024)
+	last, _ := st.Meta(ctx, "last_index_at")
+	if last == "" {
+		last = "never"
+	}
+	fmt.Fprintf(out, "last index:  %s\n", last)
+	fmt.Fprintf(out, "files:       %d (%s)\n", count(ctx, db, `SELECT count(*) FROM files`),
+		breakdown(ctx, db, `SELECT status, count(*) FROM files GROUP BY status ORDER BY status`))
+	fmt.Fprintf(out, "  by lang:   %s\n", breakdown(ctx, db, `SELECT lang, count(*) FROM files GROUP BY lang ORDER BY lang`))
+	fmt.Fprintf(out, "symbols:     %d\n", count(ctx, db, `SELECT count(*) FROM symbols`))
+	fmt.Fprintf(out, "  by kind:   %s\n", breakdown(ctx, db, `SELECT kind, count(*) FROM symbols GROUP BY kind ORDER BY count(*) DESC, kind`))
+	total := count(ctx, db, `SELECT count(*) FROM chunks`)
+	done := count(ctx, db, `SELECT count(*) FROM chunks WHERE embedded_at IS NOT NULL AND embedded_at <> 'failed'`)
+	failed := count(ctx, db, `SELECT count(*) FROM chunks WHERE embedded_at = 'failed'`)
+	fmt.Fprintf(out, "chunks:      %d (embedded %d, pending %d, failed %d)\n", total, done, total-done-failed, failed)
+	fmt.Fprintf(out, "edges:       %d (not populated before milestone 2)\n", count(ctx, db, `SELECT count(*) FROM edges`))
+	fmt.Fprintf(out, "summaries:   %d (not populated before milestone 3)\n", count(ctx, db, `SELECT count(*) FROM summaries`))
+	fp, _ := st.Meta(ctx, "embed_fingerprint")
+	dims, _ := st.VecDims(ctx)
+	if fp == "" {
+		fmt.Fprintln(out, "embedder:    none recorded")
+	} else {
+		fmt.Fprintf(out, "embedder:    %s (%d dims)\n", fp, dims)
+	}
+	return 0
+}
+
+type check struct{ level, name, detail string }
+
+func cmdDoctor(args []string, out, errw io.Writer) int {
+	fs := newFlags("doctor", errw)
+	if _, err := parseInterspersed(fs, args); err != nil {
+		return 2
+	}
+	var checks []check
+	add := func(level, name, format string, a ...any) {
+		checks = append(checks, check{level, name, fmt.Sprintf(format, a...)})
+	}
+	ctx := context.Background()
+
+	cfg, cerr := loadConfig()
+	if cerr != nil {
+		add("FAIL", "config", "%v", cerr)
+	} else {
+		add("ok", "config", "%s (%d language(s))", configPath(), len(cfg.Languages))
+	}
+
+	st, root, err := openExisting()
+	if err != nil {
+		add("FAIL", "index", "%v", err)
+		return printChecks(checks, out)
+	}
+	defer st.Close()
+	db := st.DB()
+	ver, _ := st.Meta(ctx, "schema_version")
+	add("ok", "index", "%s (schema %s)", st.Path(), ver)
+	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
+		add("FAIL", "workspace", "root %s is not accessible", root)
+	} else {
+		add("ok", "workspace", "%s", root)
+	}
+
+	for _, t := range []string{"chunk_fts", "name_fts"} {
+		if err := store.FTSCommand(ctx, db, t, "integrity-check"); err != nil {
+			add("FAIL", t, "integrity check: %v", err)
+		} else {
+			add("ok", t, "integrity check passed")
+		}
+	}
+	syms, nameRows := count(ctx, db, `SELECT count(*) FROM symbols`), count(ctx, db, `SELECT count(*) FROM name_fts`)
+	chunks, ftsRows := count(ctx, db, `SELECT count(*) FROM chunks`), count(ctx, db, `SELECT count(*) FROM chunk_fts`)
+	if syms != nameRows || chunks != ftsRows {
+		add("FAIL", "fts rows", "symbols %d vs name_fts %d, chunks %d vs chunk_fts %d (re-run `code-index index --force`)", syms, nameRows, chunks, ftsRows)
+	} else {
+		add("ok", "fts rows", "symbols %d = name_fts %d, chunks %d = chunk_fts %d", syms, nameRows, chunks, ftsRows)
+	}
+
+	if cerr == nil {
+		used := map[string]int{}
+		rows, _ := db.QueryContext(ctx, `SELECT lang, count(*) FROM files GROUP BY lang`)
+		if rows != nil {
+			for rows.Next() {
+				var l string
+				var n int
+				if rows.Scan(&l, &n) == nil {
+					used[l] = n
+				}
+			}
+			rows.Close()
+		}
+		for _, name := range cfg.LanguageNames() {
+			l := cfg.Languages[name]
+			if p, err := exec.LookPath(l.Command); err != nil {
+				add("WARN", "language "+name, "command %q not found on PATH", l.Command)
+			} else {
+				add("ok", "language "+name, "%s (%d file(s) indexed)", p, used[name])
+			}
+		}
+	}
+
+	if failed := count(ctx, db, `SELECT count(*) FROM files WHERE status='failed'`); failed > 0 {
+		add("WARN", "files", "%d file(s) failed to index; `code-index sweep` retries them", failed)
+		rows, _ := db.QueryContext(ctx, `SELECT path, COALESCE(fail_reason,'') FROM files WHERE status='failed' ORDER BY path LIMIT 5`)
+		if rows != nil {
+			for rows.Next() {
+				var p, r string
+				if rows.Scan(&p, &r) == nil {
+					add("WARN", "  failed", "%s: %s", p, oneLine(r, 160))
+				}
+			}
+			rows.Close()
+		}
+	}
+	// stale files
+	frows, err := db.QueryContext(ctx, `SELECT path, COALESCE(mtime,0), COALESCE(size,0), sha256 FROM files`)
+	if err == nil {
+		modified, deleted := 0, 0
+		for frows.Next() {
+			var p, sha string
+			var mt, sz int64
+			if frows.Scan(&p, &mt, &sz, &sha) == nil {
+				switch search.Staleness(root, p, mt, sz, sha) {
+				case "modified":
+					modified++
+				case "deleted":
+					deleted++
+				}
+			}
+		}
+		frows.Close()
+		if modified+deleted > 0 {
+			add("WARN", "freshness", "%d file(s) modified and %d deleted since indexing; run `code-index sweep`", modified, deleted)
+		} else {
+			add("ok", "freshness", "every indexed file matches the disk")
+		}
+	}
+
+	switch {
+	case cerr != nil:
+	case !cfg.EmbedEnabled():
+		add("ok", "embedder", "not configured: search uses names and full text only")
+	default:
+		emb, err := newEmbedder(cfg, st)
+		if err != nil {
+			add("FAIL", "embedder", "%v", err)
+			break
+		}
+		hctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		herr := emb.Health(hctx)
+		cancel()
+		if herr != nil {
+			add("WARN", "embedder", "%s %s: %v", cfg.Embed.Provider, cfg.Embed.Model, herr)
+		} else {
+			add("ok", "embedder", "%s %s reachable (api key: %s)", cfg.Embed.Provider, cfg.Embed.Model, provider.KeyState(cfg.Embed.APIKeyEnv))
+		}
+		fp, _ := st.Meta(ctx, "embed_fingerprint")
+		dims, _ := st.VecDims(ctx)
+		if fp != "" && fp != emb.Fingerprint() {
+			add("WARN", "embeddings", "stored with %q, configured %q: vector search is off until `code-index index --embed` re-embeds", fp, emb.Fingerprint())
+		} else if dims != 0 && emb.Dims() != 0 && dims != emb.Dims() {
+			add("WARN", "embeddings", "index has %d dims, embedder %d", dims, emb.Dims())
+		}
+		pend, _ := embed.Pending(ctx, st)
+		if pend > 0 {
+			add("WARN", "embeddings", "%d chunk(s) pending; run `code-index index --embed`", pend)
+		} else {
+			add("ok", "embeddings", "no chunks pending")
+		}
+		capN, src := cfg.Embed.DailyCap()
+		usedToday, _ := store.UsageToday(ctx, db, store.UsageEmbed, time.Now())
+		if capN == 0 {
+			add("ok", "usage", "%d chunk(s) embedded today (UTC), cap: %s", usedToday, src)
+		} else {
+			add("ok", "usage", "%d of %d chunk(s) embedded today (UTC), cap: %s", usedToday, capN, src)
+		}
+	}
+	return printChecks(checks, out)
+}
+
+func printChecks(checks []check, out io.Writer) int {
+	code := 0
+	for _, c := range checks {
+		fmt.Fprintf(out, "%-5s %-14s %s\n", c.level, c.name, c.detail)
+		if c.level == "FAIL" {
+			code = 1
+		}
+	}
+	return code
+}
