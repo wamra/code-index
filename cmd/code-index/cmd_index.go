@@ -31,9 +31,10 @@ func cmdIndex(args []string, out, errw io.Writer) int {
 	doEmbed := fs.Bool("embed", false, "embed pending chunks afterwards")
 	force := fs.Bool("force", false, "re-index files even when unchanged")
 	quiet := fs.Bool("quiet", false, "print only the summary")
+	noEdges := fs.Bool("no-edges", false, "skip call-graph edges (LSP references, AST extractor)")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil || len(pos) > 1 {
-		fmt.Fprintln(errw, "index: usage: index [PATH] [--embed] [--force] [--quiet]")
+		fmt.Fprintln(errw, "index: usage: index [PATH] [--embed] [--force] [--no-edges] [--quiet]")
 		return 2
 	}
 	target := "."
@@ -56,7 +57,7 @@ func cmdIndex(args []string, out, errw io.Writer) int {
 			fmt.Fprintf(out, "added %s/ to %s\n", workspace.DirName, p)
 		}
 	}
-	return runIndex(st, root, *force, *doEmbed, *quiet, out, errw)
+	return runIndex(st, root, *force, *doEmbed, *quiet, *noEdges, out, errw)
 }
 
 func cmdSweep(args []string, out, errw io.Writer) int {
@@ -64,6 +65,7 @@ func cmdSweep(args []string, out, errw io.Writer) int {
 	doEmbed := fs.Bool("embed", false, "embed pending chunks afterwards")
 	force := fs.Bool("force", false, "re-index files even when unchanged")
 	quiet := fs.Bool("quiet", false, "print only the summary")
+	noEdges := fs.Bool("no-edges", false, "skip call-graph edges (LSP references, AST extractor)")
 	if _, err := parseInterspersed(fs, args); err != nil {
 		return 2
 	}
@@ -72,10 +74,10 @@ func cmdSweep(args []string, out, errw io.Writer) int {
 		return fail(errw, "sweep: %v", err)
 	}
 	defer st.Close()
-	return runIndex(st, root, *force, *doEmbed, *quiet, out, errw)
+	return runIndex(st, root, *force, *doEmbed, *quiet, *noEdges, out, errw)
 }
 
-func runIndex(st *store.Store, root string, force, doEmbed, quiet bool, out, errw io.Writer) int {
+func runIndex(st *store.Store, root string, force, doEmbed, quiet, noEdges bool, out, errw io.Writer) int {
 	cfg, _, err := loadConfig(root)
 	if err != nil {
 		return fail(errw, "index: %v", err)
@@ -89,7 +91,7 @@ func runIndex(st *store.Store, root string, force, doEmbed, quiet bool, out, err
 	if quiet {
 		logw = nil
 	}
-	res, err := indexer.Run(ctx, st, cfg, indexer.Options{Root: root, Force: force, Log: logw})
+	res, err := indexer.Run(ctx, st, cfg, indexer.Options{Root: root, Force: force, Log: logw, NoEdges: noEdges})
 	if err != nil {
 		if errors.Is(err, indexer.ErrLocked) {
 			return fail(errw, "index: %v", err)
@@ -105,6 +107,12 @@ func runIndex(st *store.Store, root string, force, doEmbed, quiet bool, out, err
 		fmt.Fprintf(out, ", skipped binary %d", res.Binary)
 	}
 	fmt.Fprintf(out, " (%s)\n", res.Elapsed.Round(1e6))
+	if res.EdgeLangs > 0 {
+		fmt.Fprintf(out, "edges: %d written, %d alias symbol(s)\n", res.Edges, res.Aliases)
+	}
+	for _, n := range res.Notes {
+		fmt.Fprintf(errw, "index: note: %s\n", n)
+	}
 	for _, l := range sortedKeys(res.LangErrors) {
 		fmt.Fprintf(errw, "index: language %s unusable: %s\n", l, res.LangErrors[l])
 	}

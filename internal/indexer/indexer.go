@@ -33,6 +33,10 @@ type Options struct {
 	// EmptyRetryDelays overrides the waits before re-asking for symbols after
 	// an empty answer (nil = DefaultEmptyRetryDelays).
 	EmptyRetryDelays []time.Duration
+	// NoEdges skips call-graph edges (LSP references and AST extractors).
+	NoEdges bool
+	// Extract runs an AST extractor; nil means the embedded script run with pwsh.
+	Extract ExtractFunc
 }
 
 // Result summarizes a run.
@@ -50,7 +54,12 @@ type Result struct {
 	LangErrors map[string]string
 	// FileErrors lists "path: reason" for files that failed.
 	FileErrors []string
-	Elapsed    time.Duration
+	// Edges counts the edges written, Aliases the alias symbols the AST
+	// extractor created, in the languages whose edges were recomputed.
+	Edges, Aliases, EdgeLangs int
+	// Notes are one-line remarks about skipped optional work (no pwsh, ...).
+	Notes   []string
+	Elapsed time.Duration
 }
 
 type fileRow struct {
@@ -146,22 +155,78 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 		byLang[c.lang] = append(byLang[c.lang], work{c, data, sha})
 	}
 
-	langs := make([]string, 0, len(byLang))
+	// Drop files that vanished, became ignored, or lost their language.
+	deletedLangs := map[string]bool{}
+	for rel, row := range existing {
+		if seen[rel] {
+			continue
+		}
+		if err := dropFile(ctx, st.DB(), row.id, hasVec); err != nil {
+			return res, err
+		}
+		res.Deleted++
+		deletedLangs[row.lang] = true
+	}
+
+	// Languages whose edges need recomputing: any language with changed or
+	// deleted files, every language on --force, and a language whose edges
+	// were never computed (or were left stale by a --no-edges run).
+	edgeLangs := map[string]bool{}
+	candLangs := map[string]bool{}
+	for _, c := range cands {
+		candLangs[c.lang] = true
+	}
 	for l := range byLang {
+		edgeLangs[l] = true
+	}
+	for l := range deletedLangs {
+		edgeLangs[l] = true
+	}
+	for l := range candLangs {
+		if done, _ := st.Meta(ctx, edgesMetaKey(l)); o.Force || done != "1" {
+			edgeLangs[l] = true
+		}
+	}
+	for l := range edgeLangs {
+		if _, ok := cfg.Languages[l]; !ok || o.NoEdges {
+			if o.NoEdges && (len(byLang[l]) > 0 || deletedLangs[l] || o.Force) {
+				_ = st.SetMeta(ctx, edgesMetaKey(l), "") // stale now: recompute on the next run
+			}
+			delete(edgeLangs, l)
+		}
+	}
+
+	langSet := map[string]bool{}
+	for l := range byLang {
+		langSet[l] = true
+	}
+	for l := range edgeLangs {
+		langSet[l] = true
+	}
+	langs := make([]string, 0, len(langSet))
+	for l := range langSet {
 		langs = append(langs, l)
 	}
 	sort.Strings(langs)
+	edgesRan := false
 	for _, lang := range langs {
 		items := byLang[lang]
 		lc := cfg.Languages[lang]
 		cl, err := startServer(ctx, o, lc, root)
 		if err != nil {
-			res.LangErrors[lang] = err.Error()
-			res.Failed += len(items)
-			o.logf("%s: %d file(s) not indexed: %v", lang, len(items), err)
-			continue
+			if len(items) > 0 {
+				res.LangErrors[lang] = err.Error()
+				res.Failed += len(items)
+				o.logf("%s: %d file(s) not indexed: %v", lang, len(items), err)
+				_ = st.SetMeta(ctx, edgesMetaKey(lang), "")
+				continue
+			}
+			// nothing to re-index: still build the edges the AST extractor can give
+			res.Notes = append(res.Notes, fmt.Sprintf("%s: no language server (%v); LSP edges skipped", lang, err))
+			cl = nil
+		} else {
+			o.logf("%s: %s %s ready, indexing %d file(s)", lang, orDash(cl.ServerName), cl.ServerVersion, len(items))
 		}
-		o.logf("%s: %s %s ready, indexing %d file(s)", lang, orDash(cl.ServerName), cl.ServerVersion, len(items))
 		rs := &retryState{delays: o.EmptyRetryDelays}
 		if rs.delays == nil {
 			rs.delays = DefaultEmptyRetryDelays
@@ -186,22 +251,37 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 			res.Chunks += fs.chunks
 			o.logf("  %s: %d symbol(s)", w.c.rel, fs.symbols)
 		}
-		cl.Close()
+		if edgeLangs[lang] && ctx.Err() == nil && res.LangErrors[lang] == "" {
+			es, err := computeEdges(ctx, st, o, root, lang, lc, cl)
+			res.Notes = append(res.Notes, es.Notes...)
+			if err != nil {
+				res.Notes = append(res.Notes, fmt.Sprintf("%s: edges not computed: %v", lang, err))
+				_ = st.SetMeta(ctx, edgesMetaKey(lang), "")
+			} else {
+				res.Edges += es.Edges
+				res.Aliases += es.Aliases
+				res.EdgeLangs++
+				edgesRan = true
+				o.logf("  %s: %d edge(s), %d alias(es)", lang, es.Edges, es.Aliases)
+				_ = st.SetMeta(ctx, edgesMetaKey(lang), "1")
+			}
+		} else if edgeLangs[lang] {
+			_ = st.SetMeta(ctx, edgesMetaKey(lang), "")
+		}
+		if cl != nil {
+			cl.Close()
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		res.Elapsed = time.Since(start)
 		return res, err
 	}
-
-	// Drop files that vanished, became ignored, or lost their language.
-	for rel, row := range existing {
-		if seen[rel] {
-			continue
-		}
-		if err := dropFile(ctx, st.DB(), row.id, hasVec); err != nil {
+	if edgesRan {
+		n, err := refreshLinks(ctx, st)
+		if err != nil {
 			return res, err
 		}
-		res.Deleted++
+		o.logf("calls / called by lines changed in %d chunk(s)", n)
 	}
 	if err := st.SetMeta(ctx, "last_index_at", time.Now().UTC().Format(time.RFC3339)); err != nil {
 		return res, err
@@ -209,6 +289,8 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 	res.Elapsed = time.Since(start)
 	return res, nil
 }
+
+func edgesMetaKey(lang string) string { return "edges_lang:" + lang }
 
 func orDash(s string) string {
 	if s == "" {
