@@ -34,8 +34,9 @@ test('the search tool runs the binary with --json, puts the query after -- and f
 
   const out = await $.tool.call({ tool: 'mcp__code-index-search__search', query: '-Name widget', kind: 'function', k: 3, repo: '/work/repo' })
   expect(seen[0]).toBe('sh')
-  expect(seen[1]).toMatch(/\/bin\/code-index$/)
-  expect(seen.slice(2)).toEqual(['search', '--json', '--k', '3', '--kind', 'function', '--', '-Name widget'])
+  expect(seen[1]).toBe('-c')
+  expect(seen[3]).toMatch(/\/bin\/code-index$/)
+  expect(seen.slice(4)).toEqual(['search', '--json', '--k', '3', '--kind', 'function', '--', '-Name widget'])
   expect(cwd).toBe('/work/repo')
   const text = String((out as { result?: unknown }).result)
   expect(text).toContain('function Get-Widget  Widgets/Widgets.psm1:6')
@@ -55,7 +56,7 @@ test('the show tool passes --source and the symbol after --', async ($, on) => {
 
   const out = await $.tool.call({ tool: 'mcp__code-index-search__show', symbol: 'lib.ps1:5', source: true })
   expect(seen[0]).toBe('sh')
-  expect(seen.slice(2)).toEqual(['show', '--source', '--', 'lib.ps1:5'])
+  expect(seen.slice(4)).toEqual(['show', '--source', '--', 'lib.ps1:5'])
   expect(String((out as { result?: unknown }).result)).toContain('Widgets/Widgets.psm1:6-16')
 })
 

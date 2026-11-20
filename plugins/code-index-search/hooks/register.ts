@@ -69,12 +69,15 @@ function formatHits(stdout: string): string {
   return `${route}${lines.join('\n')}\n\nRead one with the show tool (qualified name, name or path:line). Paths are relative to the repo root.`
 }
 
+const LAUNCH = 'if [ -f "$0" ]; then exec sh "$0" "$@"; fi; exit 127'
+
 // Without a "binary" option the plugin runs its bundled launcher (bin/ next to plugin.json) and
 // falls back to code-index on PATH when the launcher is absent (sh exits 127).
 async function run($: EngineInterface, bin: string, argv: string[], repo?: string, timeoutMs = 90_000) {
   try {
     const opts = { timeoutMs, ...(repo ? { cwd: repo } : {}) }
-    let r = await $.process.run(bin === DEFAULT_BIN ? ['sh', `${$.plugin.root}/bin/code-index`, ...argv] : [bin, ...argv], opts)
+    // The existence test is explicit: a missing script makes bash exit 127 but dash exit 2.
+    let r = await $.process.run(bin === DEFAULT_BIN ? ['sh', '-c', LAUNCH, `${$.plugin.root}/bin/code-index`, ...argv] : [bin, ...argv], opts)
     if (bin === DEFAULT_BIN && r.exitCode === 127) r = await $.process.run([bin, ...argv], opts)
     if (r.exitCode !== 0) return { ok: false as const, text: clip(`code-index exited ${r.exitCode}: ${r.stderr.trim() || r.stdout.trim()}`, MAX_TEXT) }
     return { ok: true as const, text: r.stdout }
