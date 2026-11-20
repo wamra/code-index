@@ -90,3 +90,60 @@ test('without the bundled launcher (sh exits 127) it falls back to code-index on
   expect(calls).toEqual(['sh', 'code-index'])
   expect(String((out as { result?: unknown }).result)).toContain('Widgets/Widgets.psm1:6-16')
 })
+
+test('callers, callees and impact run the matching subcommand with the symbol after --', async ($, on) => {
+  const seen: (readonly string[])[] = []
+  on('process.run', (_, e) => {
+    seen.push(e.argv.slice(4))
+    return OK('lib.ps1:10  Invoke-Helper  [lsp+ast exact]')
+  })
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('command.register', () => ({ value: { command: 'code' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const callers = await $.tool.call({ tool: 'mcp__code-index-search__callers', symbol: 'Get-Widget', repo: '/work/repo' })
+  expect(String((callers as { result?: unknown }).result)).toContain('lib.ps1:10  Invoke-Helper  [lsp+ast exact]')
+  await $.tool.call({ tool: 'mcp__code-index-search__callees', symbol: '-Name' })
+  await $.tool.call({ tool: 'mcp__code-index-search__impact', symbol: 'Get-Widget', depth: 99 })
+  await $.tool.call({ tool: 'mcp__code-index-search__impact', symbol: 'Get-Widget' })
+  expect(seen).toEqual([
+    ['callers', '--', 'Get-Widget'],
+    ['callees', '--', '-Name'],
+    ['impact', '--depth', '10', '--', 'Get-Widget'],
+    ['impact', '--depth', '3', '--', 'Get-Widget'],
+  ])
+  const none = await $.tool.call({ tool: 'mcp__code-index-search__callers', symbol: '' })
+  expect((none as { deny?: string }).deny).toBeDefined()
+})
+
+test('an empty callers answer explains itself and an error is an error result', async ($, on) => {
+  let fail = false
+  on('process.run', () => (fail ? { value: { exitCode: 1, stdout: '', stderr: 'callers: no symbol matches "x"', isStdoutTruncated: false, isStderrTruncated: false } } : OK('')))
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('command.register', () => ({ value: { command: 'code' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const empty = await $.tool.call({ tool: 'mcp__code-index-search__callers', symbol: 'Lone' })
+  expect(String((empty as { result?: unknown }).result)).toContain('No callers recorded for Lone')
+  fail = true
+  const bad = await $.tool.call({ tool: 'mcp__code-index-search__callers', symbol: 'x' })
+  expect(JSON.stringify(bad)).toContain('no symbol matches')
+})
+
+test('/code callers <symbol> runs callers and prints its lines', async ($, on) => {
+  let seen: readonly string[] = []
+  on('process.run', (_, e) => {
+    seen = e.argv.slice(4)
+    return OK('main.ps1:3  main.ps1 (top level)  [lsp+ast exact]')
+  })
+  on('tool.register', () => ({ value: { tool: 'x' } }))
+  on('command.register', () => ({ value: { command: 'code' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const out = await $.command.run({ command: 'code', args: 'callers Get-Widget' } as never)
+  expect(seen).toEqual(['callers', '--', 'Get-Widget'])
+  expect(String((out as { text?: unknown }).text)).toContain('main.ps1:3  main.ps1 (top level)')
+})

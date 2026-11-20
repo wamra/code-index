@@ -13,8 +13,8 @@ It is the sibling of `session-index`,
 which does the same for Claude Code chat sessions, and shares its SQLite stack
 (`ncruces/go-sqlite3` + `sqlite-vec` through wazero) and its provider code.
 
-Status: milestone 1 (core index and search). Call graphs, summaries, hooks and
-an LSP proxy are planned.
+Status: milestone 2 (symbols, search, call graph and traversal). Summaries,
+hooks and an LSP proxy are planned.
 
 ## Install
 
@@ -42,11 +42,11 @@ Linux and Windows (amd64, arm64) with checksums into `dist/`.
 
 `code-index install-skill [--dir SKILLS_DIR]` writes the `code-search` skill to
 `~/.claude/skills/code-search/SKILL.md`; it tells Claude Code when to use
-`code-index search` and `show`.
+`code-index search`, `show` and the call-graph commands.
 
 **Tools inside Claude Code:** the installer also registers this checkout as a
-plugin marketplace and installs the `code-index-search` mod: `search` and
-`show` tools the model calls directly, and a `/code` command
+plugin marketplace and installs the `code-index-search` mod: `search`, `show`,
+`callers`, `callees` and `impact` tools the model calls directly, and a `/code` command
 ([plugins/code-index-search](plugins/code-index-search/README.md)). It is
 skipped when `claude` is not on PATH. Restart Claude Code afterwards.
 
@@ -95,6 +95,9 @@ entry:
 - `embed`: providers `ollama`, `openai` (any OpenAI-compatible server) and
   `bedrock`. Embeddings are off unless `enabled` is true or a provider/model is
   given. `api_key_env` names an environment variable; keys are never printed.
+- `languages.<name>.extractor`: `"powershell-ast"` runs the PowerShell AST
+  extractor next to the server (see Call graph). `config init` writes it for
+  the powershell entry.
 - `summarize`: parsed, not used yet.
 - `index.ignore`: `.gitignore`-style patterns on top of the `.gitignore` files
   of the workspace. `max_file_size` is in bytes.
@@ -131,10 +134,14 @@ from any subdirectory. `CODE_INDEX_DB` overrides the location.
 ## Commands
 
 ```
-code-index index [PATH] [--embed] [--force]   index a workspace (default: .)
-code-index sweep [--embed] [--force]          re-index changed files, drop deleted ones
+code-index index [PATH] [--embed] [--force] [--no-edges]   index a workspace (default: .)
+code-index sweep [--embed] [--force] [--no-edges]          re-index changed files, drop deleted ones
 code-index search QUERY [--mode auto|vector|fts|hybrid] [--kind K] [--lang L] [--path SUBSTR] [--k 10] [--json]
 code-index show SYMBOL [--source] [--json]    qualified name, name or path:line
+code-index callers SYMBOL [--json]            who calls SYMBOL
+code-index callees SYMBOL [--json]            what SYMBOL calls (a file path: its top-level calls)
+code-index impact SYMBOL [--depth 3] [--json] transitive callers
+code-index path FROM TO [--json]              shortest call path
 code-index stats
 code-index doctor
 code-index config [init [--force]]
@@ -148,6 +155,43 @@ names and paths; anything else goes to the vector index when embeddings exist,
 and to full-text search over the symbol text otherwise. Each hit shows kind,
 qualified name, `path:line`, signature, and a `[stale: ...]` marker when the
 file changed since it was indexed.
+
+## Call graph
+
+`index` and `sweep` also build call edges (skip with `--no-edges`):
+
+- **LSP references.** For every function and method, `textDocument/references`
+  at its name (when the server advertises `referencesProvider`). Each reference
+  becomes a `calls` edge from the innermost function, method or class that
+  contains it, or from the file for top-level code; the declaration itself is
+  skipped. Source `lsp`, confidence `exact`.
+- **PowerShell AST extractor** (`"extractor": "powershell-ast"`). One `pwsh` run
+  over the `.ps1` and `.psm1` files of the language, using the PowerShell
+  parser. It adds: calls through aliases (`Set-Alias`, `New-Alias`, `[Alias()]`;
+  confidence `alias`, the alias becomes a symbol of kind `alias` with an
+  `alias_of` edge), dynamic calls (`& $var`, `Invoke-Expression`; confidence
+  `dynamic`, the expression text is kept), and `dot_sources` / `imports` edges
+  between files. Only names that resolve to a workspace function or alias become
+  call edges; Get-Process, Write-Host and other built-ins are not stored. Without
+  `pwsh` the extractor is skipped with one note. When both sources report the
+  same call the row has source `lsp+ast`.
+
+Edges of a language are recomputed whenever one of its files changed or was
+deleted (all of them, not only the changed files: a change moves symbol ids and
+who references whom), and once after `--no-edges`. Chunk text gains `calls:` and
+`called by:` lines; only chunks whose text changed are re-embedded.
+
+```
+$ code-index callers Get-Widget
+lib.ps1:10  Invoke-Helper  [lsp+ast exact]
+main.ps1:3  main.ps1 (top level)  [lsp+ast exact]
+main.ps1:4  main.ps1 (top level) (via gw)  [ast alias]
+```
+
+`impact` follows callers up to `--depth` levels (default 3, cycles are followed
+once); `path` prints the shortest chain of calls. `callees` accepts a file path
+for the calls made at the top level of that file. `stats` shows the edge counts
+by kind, source and confidence.
 
 ## Tests
 

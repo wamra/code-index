@@ -4,6 +4,9 @@ const DEFAULT_BIN = 'code-index'
 
 const SEARCH = 'mcp__code-index-search__search'
 const SHOW = 'mcp__code-index-search__show'
+const CALLERS = 'mcp__code-index-search__callers'
+const CALLEES = 'mcp__code-index-search__callees'
+const IMPACT = 'mcp__code-index-search__impact'
 const MAX_TEXT = 12000
 
 type Hit = {
@@ -31,6 +34,8 @@ type SearchInput = {
 }
 
 type ShowInput = { symbol: string; source?: boolean; repo?: string }
+
+type GraphInput = { symbol: string; depth?: number; repo?: string }
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n[cut: ${s.length - n} more characters]` : s)
 
@@ -69,6 +74,15 @@ function formatHits(stdout: string): string {
   return `${route}${lines.join('\n')}\n\nRead one with the show tool (qualified name, name or path:line). Paths are relative to the repo root.`
 }
 
+// "callers", "callees" and "impact" print one line per call edge:
+// path:line  name  [source confidence]. The symbol goes after "--" like the search query.
+function graphArgv(cmd: 'callers' | 'callees' | 'impact', i: GraphInput): string[] {
+  const argv: string[] = [cmd]
+  if (cmd === 'impact') argv.push('--depth', String(Math.min(Math.max(Math.trunc(i.depth ?? 3) || 3, 1), 10)))
+  argv.push('--', i.symbol)
+  return argv
+}
+
 const LAUNCH = 'if [ -f "$0" ]; then exec sh "$0" "$@"; fi; exit 127'
 
 // Without a "binary" option the plugin runs its bundled launcher (bin/ next to plugin.json) and
@@ -84,6 +98,16 @@ async function run($: EngineInterface, bin: string, argv: string[], repo?: strin
   } catch (err) {
     return { ok: false as const, text: `Could not run '${bin}': ${String(err)}. Set the code-index-search "binary" option to the executable's full path.` }
   }
+}
+
+// One handler for the three graph tools.
+async function graph($: EngineInterface, bin: string, cmd: 'callers' | 'callees' | 'impact', e: unknown) {
+  const i = e as GraphInput
+  if (typeof i.symbol !== 'string' || i.symbol.trim() === '') return { deny: 'symbol is required.' }
+  const r = await run($, bin, graphArgv(cmd, i), i.repo)
+  // An empty answer is not an error: the CLI explains on stderr, which run() drops on success.
+  const empty = `No ${cmd === 'callees' ? 'callees' : 'callers'} recorded for ${i.symbol}. The call graph may not be indexed: run 'code-index index' in the repo.`
+  return { result: clip(r.ok ? r.text.trim() || empty : r.text, MAX_TEXT), ...(r.ok ? {} : { isError: true as const }) } as never
 }
 
 const REPO = { type: 'string', description: 'Absolute path inside the repo to search. Default: the session directory.' } as const
@@ -126,10 +150,37 @@ export const register: Register = (on, options) => {
       },
       isDeferred: false,
     })
+    const SYMBOL = { type: 'string', description: 'Qualified name, name, or path:line. A file path means the top-level code of that file.' } as const
+    await $.tool.register({
+      name: 'callers',
+      description:
+        "List who calls a symbol, from the call graph in the code index (language server references plus, for PowerShell, the AST extractor). One line per call site: path:line, the calling function (or the file for top-level code), and [source confidence]: exact is a resolved call, alias went through an alias, dynamic cannot be resolved statically. Use it before changing a function, instead of grepping for its name.",
+      inputSchema: { type: 'object', properties: { symbol: SYMBOL, repo: REPO }, required: ['symbol'] },
+      isDeferred: false,
+    })
+    await $.tool.register({
+      name: 'callees',
+      description:
+        "List what a function calls, from the call graph in the code index: one line per call site with path:line, the callee and [source confidence]. Pass a file path to list the calls made at the top level of that file; dynamic calls (& $var, Invoke-Expression) show their expression with confidence dynamic.",
+      inputSchema: { type: 'object', properties: { symbol: SYMBOL, repo: REPO }, required: ['symbol'] },
+      isDeferred: false,
+    })
+    await $.tool.register({
+      name: 'impact',
+      description:
+        "List the transitive callers of a symbol: everything that could be affected by changing it. One line per call edge, d1 = direct callers, d2 = their callers, and so on (default depth 3, cycles are followed once). Run it before changing a widely used function.",
+      inputSchema: {
+        type: 'object',
+        properties: { symbol: SYMBOL, depth: { type: 'number', description: 'Caller levels to follow, 1 to 10 (default 3).' }, repo: REPO },
+        required: ['symbol'],
+      },
+      isDeferred: false,
+    })
     await $.command.register({
       name: 'code',
-      description: 'Search the code index: /code <query>, /code show <symbol>, /code index to (re)index this repo, or /code alone for index stats',
-      argumentHint: '[query | show <symbol> | index]',
+      description:
+        'Search the code index: /code <query>, /code show <symbol>, /code callers <symbol>, /code index to (re)index this repo, or /code alone for index stats',
+      argumentHint: '[query | show <symbol> | callers <symbol> | index]',
     })
     return next(e)
   })
@@ -148,6 +199,10 @@ export const register: Register = (on, options) => {
     return { result: clip(r.text.trim() || 'No such symbol.', MAX_TEXT), ...(r.ok ? {} : { isError: true as const }) } as never
   }).catch(() => ({ deny: 'code-index-search failed unexpectedly; try the code-index command in Bash.' }))
 
+  on('tool.call', { tool: CALLERS }, async ($, e) => graph($, bin, 'callers', e)).catch(() => ({ deny: 'code-index-search failed unexpectedly; try the code-index command in Bash.' }))
+  on('tool.call', { tool: CALLEES }, async ($, e) => graph($, bin, 'callees', e)).catch(() => ({ deny: 'code-index-search failed unexpectedly; try the code-index command in Bash.' }))
+  on('tool.call', { tool: IMPACT }, async ($, e) => graph($, bin, 'impact', e)).catch(() => ({ deny: 'code-index-search failed unexpectedly; try the code-index command in Bash.' }))
+
   on('command.run', { command: 'code' }, async ($, e) => {
     const args = e.args.trim()
     if (args === '') {
@@ -163,6 +218,11 @@ export const register: Register = (on, options) => {
     if (m) {
       const r = await run($, bin, ['show', '--', m[1] ?? ''])
       return { text: clip(r.text.trim() || 'No such symbol.', MAX_TEXT) }
+    }
+    const c = /^callers\s+(.+)$/.exec(args)
+    if (c) {
+      const r = await run($, bin, graphArgv('callers', { symbol: c[1] ?? '' }))
+      return { text: clip(r.text.trim() || 'No callers recorded.', MAX_TEXT) }
     }
     const r = await run($, bin, searchArgv({ query: args }))
     return { text: r.ok ? formatHits(r.text) : r.text }

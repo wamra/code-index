@@ -1,7 +1,7 @@
 {
   "name": "code-index-search",
-  "version": "0.1.0",
-  "description": "Search and read a repo's code index through the code-index binary: two model tools and a /code command.",
+  "version": "0.2.0",
+  "description": "Search and read a repo's code index through the code-index binary: five model tools (search, show, callers, callees, impact) and a /code command.",
   "userConfig": {
     "binary": {
       "type": "string",
