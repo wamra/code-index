@@ -1,5 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 
+const DEFAULT_BIN = 'code-index'
+
 const SEARCH = 'mcp__code-index-search__search'
 const SHOW = 'mcp__code-index-search__show'
 const MAX_TEXT = 12000
@@ -67,9 +69,13 @@ function formatHits(stdout: string): string {
   return `${route}${lines.join('\n')}\n\nRead one with the show tool (qualified name, name or path:line). Paths are relative to the repo root.`
 }
 
+// Without a "binary" option the plugin runs its bundled launcher (bin/ next to plugin.json) and
+// falls back to code-index on PATH when the launcher is absent (sh exits 127).
 async function run($: EngineInterface, bin: string, argv: string[], repo?: string, timeoutMs = 90_000) {
   try {
-    const r = await $.process.run([bin, ...argv], { timeoutMs, ...(repo ? { cwd: repo } : {}) })
+    const opts = { timeoutMs, ...(repo ? { cwd: repo } : {}) }
+    let r = await $.process.run(bin === DEFAULT_BIN ? ['sh', `${$.plugin.root}/bin/code-index`, ...argv] : [bin, ...argv], opts)
+    if (bin === DEFAULT_BIN && r.exitCode === 127) r = await $.process.run([bin, ...argv], opts)
     if (r.exitCode !== 0) return { ok: false as const, text: clip(`code-index exited ${r.exitCode}: ${r.stderr.trim() || r.stdout.trim()}`, MAX_TEXT) }
     return { ok: true as const, text: r.stdout }
   } catch (err) {
@@ -80,7 +86,7 @@ async function run($: EngineInterface, bin: string, argv: string[], repo?: strin
 const REPO = { type: 'string', description: 'Absolute path inside the repo to search. Default: the session directory.' } as const
 
 export const register: Register = (on, options) => {
-  const bin = String((options as { binary?: string } | undefined)?.binary || 'code-index')
+  const bin = String((options as { binary?: string } | undefined)?.binary || DEFAULT_BIN)
 
   on('session.start', async ($, e, next) => {
     await $.tool.register({

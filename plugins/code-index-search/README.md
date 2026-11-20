@@ -11,3 +11,5 @@ Setup: install the `code-index` binary and make sure it is on PATH, or set the p
 The model tools only read. Indexing is left to `/code index` or `code-index index`.
 
 Install: `scripts/install.sh` in the code-index repository installs the binary and this mod. By hand: `claude plugin marketplace add <owner>/code-index` (or a local checkout path), then `claude plugin install code-index-search@code-index`. Restart Claude Code afterwards.
+
+The `plugin` branch (built by CI from `main`) carries the six binaries, so installing from that branch needs no separate binary. `scripts/build-plugin.sh OUT` builds the same tree locally.

@@ -33,7 +33,9 @@ test('the search tool runs the binary with --json, puts the query after -- and f
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
   const out = await $.tool.call({ tool: 'mcp__code-index-search__search', query: '-Name widget', kind: 'function', k: 3, repo: '/work/repo' })
-  expect(seen).toEqual(['code-index', 'search', '--json', '--k', '3', '--kind', 'function', '--', '-Name widget'])
+  expect(seen[0]).toBe('sh')
+  expect(seen[1]).toMatch(/\/bin\/code-index$/)
+  expect(seen.slice(2)).toEqual(['search', '--json', '--k', '3', '--kind', 'function', '--', '-Name widget'])
   expect(cwd).toBe('/work/repo')
   const text = String((out as { result?: unknown }).result)
   expect(text).toContain('function Get-Widget  Widgets/Widgets.psm1:6')
@@ -52,7 +54,8 @@ test('the show tool passes --source and the symbol after --', async ($, on) => {
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
   const out = await $.tool.call({ tool: 'mcp__code-index-search__show', symbol: 'lib.ps1:5', source: true })
-  expect(seen).toEqual(['code-index', 'show', '--source', '--', 'lib.ps1:5'])
+  expect(seen[0]).toBe('sh')
+  expect(seen.slice(2)).toEqual(['show', '--source', '--', 'lib.ps1:5'])
   expect(String((out as { result?: unknown }).result)).toContain('Widgets/Widgets.psm1:6-16')
 })
 
@@ -67,4 +70,22 @@ test('an empty query is refused and a failing binary is an error result', async 
   expect((empty as { deny?: string }).deny).toBeDefined()
   const bad = await $.tool.call({ tool: 'mcp__code-index-search__search', query: 'x' })
   expect(JSON.stringify(bad)).toContain('no index')
+})
+
+test('without the bundled launcher (sh exits 127) it falls back to code-index on PATH', async ($, on) => {
+  const calls: string[] = []
+  on('process.run', (_, e) => {
+    calls.push(e.argv[0])
+    return e.argv[0] === 'sh'
+      ? { value: { exitCode: 127, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      : OK('function Get-Widget\n  file: Widgets/Widgets.psm1:6-16')
+  })
+  on('tool.register', () => ({ value: {} }))
+  on('command.register', () => ({ value: { command: 'code' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const out = await $.tool.call({ tool: 'mcp__code-index-search__show', symbol: 'lib.ps1:5' })
+  expect(calls).toEqual(['sh', 'code-index'])
+  expect(String((out as { result?: unknown }).result)).toContain('Widgets/Widgets.psm1:6-16')
 })

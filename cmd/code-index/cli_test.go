@@ -93,6 +93,14 @@ func TestEndToEndWithoutEmbedder(t *testing.T) {
 		t.Fatalf("search before index: %d %q", code, errw)
 	}
 
+	// doctor --no-index: config, language servers and embedder only, no index FAIL
+	if out := mustOK(t, "doctor", "--no-index"); strings.Contains(out, "index ") || strings.Contains(out, "FAIL") || !strings.Contains(out, "ok    config") || !strings.Contains(out, "language powershell") || !strings.Contains(out, "embedder") {
+		t.Errorf("doctor --no-index before any index:\n%s", out)
+	}
+	if code, out, _ := cli(t, "doctor"); code != 1 || !strings.Contains(out, "FAIL  index") {
+		t.Errorf("plain doctor without an index should still fail on it: %d\n%s", code, out)
+	}
+
 	out := mustOK(t, "index", e.root, "--quiet")
 	if !strings.Contains(out, "5 file(s) of configured languages; indexed 5") || !strings.Contains(out, "failed 0") {
 		t.Fatalf("index summary: %s", out)

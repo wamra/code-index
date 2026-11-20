@@ -92,6 +92,7 @@ type check struct{ level, name, detail string }
 
 func cmdDoctor(args []string, out, errw io.Writer) int {
 	fs := newFlags("doctor", errw)
+	noIndex := fs.Bool("no-index", false, "check the configuration, language servers and embedder only; skip the index of this directory")
 	if _, err := parseInterspersed(fs, args); err != nil {
 		return 2
 	}
@@ -112,6 +113,34 @@ func cmdDoctor(args []string, out, errw io.Writer) int {
 			}
 		}
 		add("ok", "config", "%d language(s); files read: %s", len(cfg.Languages), joinKeys(files))
+	}
+
+	if *noIndex {
+		if cerr == nil {
+			for _, name := range cfg.LanguageNames() {
+				l := cfg.Languages[name]
+				if p, err := exec.LookPath(l.Command); err != nil {
+					add("WARN", "language "+name, "command %q not found on PATH", l.Command)
+				} else {
+					add("ok", "language "+name, "%s", p)
+				}
+			}
+			if !cfg.EmbedEnabled() {
+				add("ok", "embedder", "not configured: search uses names and full text only")
+			} else if emb, err := newEmbedder(cfg, nil); err != nil {
+				add("FAIL", "embedder", "%v", err)
+			} else {
+				hctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				herr := emb.Health(hctx)
+				cancel()
+				if herr != nil {
+					add("WARN", "embedder", "%s %s: %v", cfg.Embed.Provider, cfg.Embed.Model, herr)
+				} else {
+					add("ok", "embedder", "%s %s reachable (api key: %s)", cfg.Embed.Provider, cfg.Embed.Model, provider.KeyState(cfg.Embed.APIKeyEnv))
+				}
+			}
+		}
+		return printChecks(checks, out)
 	}
 
 	st, root, err := openExisting()
