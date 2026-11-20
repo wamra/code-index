@@ -45,7 +45,10 @@ type env struct {
 
 // setup writes a config with a fake language server (and optionally a fake
 // Ollama), points the tool at a temp database and copies the PowerShell fixture.
-func setup(t *testing.T, embedURL string) env {
+func setup(t *testing.T, embedURL string) env { return setupOpts(t, embedURL, "emptyfirst=1") }
+
+// setupOpts is setup with the fake language server's quirk flags (see lsptest.ParseOptions).
+func setupOpts(t *testing.T, embedURL, fakeOpts string) env {
 	t.Helper()
 	tmp := t.TempDir()
 	e := env{root: filepath.Join(tmp, "ws"), cfgPath: filepath.Join(tmp, "config.json")}
@@ -64,7 +67,7 @@ func setup(t *testing.T, embedURL string) env {
 		"languages": map[string]any{
 			"powershell": map[string]any{
 				"command": os.Args[0], "args": []string{"-test.run=^$"},
-				"env":        map[string]string{"CODE_INDEX_FAKE_LSP_SERVE": "1", "CODE_INDEX_FAKE_LSP": "emptyfirst=1"},
+				"env":        map[string]string{"CODE_INDEX_FAKE_LSP_SERVE": "1", "CODE_INDEX_FAKE_LSP": fakeOpts},
 				"extensions": []string{".ps1", ".psm1", ".psd1"}, "language_id": "powershell",
 				"startup_timeout_s": 20, "request_timeout_s": 10,
 			},

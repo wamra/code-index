@@ -35,10 +35,14 @@ var commands map[string]command
 
 func init() {
 	commands = map[string]command{
-		"index":         {cmdIndex, "index [PATH] [--embed] [--force] [--quiet]"},
-		"sweep":         {cmdSweep, "sweep [--embed] [--force] [--quiet]"},
+		"index":         {cmdIndex, "index [PATH] [--embed] [--force] [--no-edges] [--quiet]"},
+		"sweep":         {cmdSweep, "sweep [--embed] [--force] [--no-edges] [--quiet]"},
 		"search":        {cmdSearch, "search QUERY [--mode auto|vector|fts|hybrid] [--kind KIND] [--lang LANG] [--path SUBSTR] [--k 10] [--json]"},
 		"show":          {cmdShow, "show SYMBOL [--source] [--json]   (SYMBOL: qualified name, name or path:line)"},
+		"callers":       {cmdCallers, "callers SYMBOL [--json]   (who calls SYMBOL)"},
+		"callees":       {cmdCallees, "callees SYMBOL [--json]   (what SYMBOL calls)"},
+		"impact":        {cmdImpact, "impact SYMBOL [--depth 3] [--json]   (transitive callers)"},
+		"path":          {cmdPath, "path FROM TO [--json]   (shortest call path)"},
 		"stats":         {cmdStats, "stats"},
 		"doctor":        {cmdDoctor, "doctor"},
 		"config":        {cmdConfig, "config [init [--force]]"},
