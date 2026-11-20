@@ -10,10 +10,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/wamra/code-index/internal/lsp"
 )
 
 // Options select the quirks the fake server exhibits.
@@ -27,12 +30,15 @@ type Options struct {
 	FailPath       string // documentSymbol fails for URIs containing this text
 	AskConfig      int    // send workspace/configuration with this many items after initialized
 	ConfigReply    func(raw json.RawMessage)
+	Refs           bool      // advertise referencesProvider and answer it by scanning the workspace for the word at the position
+	RefsFail       bool      // textDocument/references answers an error
 	OpenCalls      *[]string // records didOpen URIs
 	ConfigRepliesN *int
 }
 
 // ParseOptions reads the CODE_INDEX_FAKE_LSP value: comma-separated flags
-// "flat", "junk", "starting=N", "nohover", "nodocsymbol", "failpath=TEXT", "config=N".
+// "flat", "junk", "starting=N", "nohover", "nodocsymbol", "failpath=TEXT", "config=N",
+// "refs", "refsfail".
 func ParseOptions(s string) Options {
 	var o Options
 	for _, f := range strings.Split(s, ",") {
@@ -50,6 +56,10 @@ func ParseOptions(s string) Options {
 			o.NoHover = true
 		case "nodocsymbol":
 			o.NoDocSymbol = true
+		case "refs":
+			o.Refs = true
+		case "refsfail":
+			o.Refs, o.RefsFail = true, true
 		case "failpath":
 			o.FailPath = v
 		case "config":
@@ -163,6 +173,7 @@ func Serve(in io.Reader, out io.Writer, o Options) {
 		fmt.Fprint(out, o.Junk)
 	}
 	docs := map[string]string{}
+	root := ""
 	startingLeft := o.Starting
 outer:
 	for {
@@ -209,6 +220,14 @@ outer:
 			if !o.NoDocSymbol {
 				caps["documentSymbolProvider"] = true
 			}
+			if o.Refs {
+				caps["referencesProvider"] = true
+			}
+			var ip struct {
+				RootPath string `json:"rootPath"`
+			}
+			json.Unmarshal(m.Params, &ip)
+			root = ip.RootPath
 			if !o.NoHover {
 				caps["hoverProvider"] = map[string]any{}
 			}
@@ -289,6 +308,22 @@ outer:
 			} else {
 				reply(hierarchical(syms, -1))
 			}
+		case "textDocument/references":
+			if o.RefsFail {
+				fail(-32603, "references failed in fake server")
+				continue
+			}
+			var p struct {
+				TextDocument struct{ URI string } `json:"textDocument"`
+				Position     pos                  `json:"position"`
+			}
+			json.Unmarshal(m.Params, &p)
+			text, open := docs[p.TextDocument.URI]
+			if !open {
+				fail(-32602, "document not open")
+				continue
+			}
+			reply(references(root, p.TextDocument.URI, text, p.Position))
 		case "shutdown":
 			reply(nil)
 		case "exit":
@@ -299,4 +334,55 @@ outer:
 			}
 		}
 	}
+}
+
+var declBeforeRe = regexp.MustCompile(`\b(function|class)\s+$`)
+
+var wordRe = regexp.MustCompile(`[\w-]+`)
+
+// references answers textDocument/references the way a naive server would:
+// every whole-word occurrence of the word at the position in any file under
+// root, except the occurrence at the position itself (the declaration).
+func references(root, uri, text string, at pos) []map[string]any {
+	lines := strings.Split(text, "\n")
+	if at.Line >= len(lines) {
+		return []map[string]any{}
+	}
+	var word string
+	for _, m := range wordRe.FindAllStringIndex(lines[at.Line], -1) {
+		if m[0] <= at.Character && at.Character <= m[1] {
+			word = lines[at.Line][m[0]:m[1]]
+		}
+	}
+	out := []map[string]any{}
+	if word == "" || root == "" {
+		return out
+	}
+	declURI := uri
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if n := d.Name(); n == ".Wammy" || n == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		u := lsp.PathToURI(p)
+		for i, l := range strings.Split(string(b), "\n") {
+			for _, m := range wordRe.FindAllStringIndex(l, -1) {
+				if l[m[0]:m[1]] != word || (u == declURI && i == at.Line && m[0] == at.Character) || declBeforeRe.MatchString(l[:m[0]]) {
+					continue // not the word, the declaration asked about, or another declaration of the name
+				}
+				out = append(out, map[string]any{"uri": u, "range": rng{pos{i, m[0]}, pos{i, m[1]}}})
+			}
+		}
+		return nil
+	})
+	return out
 }

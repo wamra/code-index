@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -209,4 +211,42 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestReferences(t *testing.T) {
+	root := t.TempDir()
+	src := "function Alpha {\n  Beta\n}\nfunction Beta {\n}\n"
+	file := filepath.Join(root, "a.ps1")
+	if err := os.WriteFile(file, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	cl := pipeClient(t, lsptest.Options{})
+	if err := cl.Initialize(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	if cl.Capabilities().References {
+		t.Fatal("references must not be advertised by default")
+	}
+	if _, err := cl.References(ctx, lsp.PathToURI(file), lsp.Position{Line: 3, Character: 9}); !errors.Is(err, lsp.ErrNotAdvertised) {
+		t.Fatalf("References without capability: %v", err)
+	}
+
+	cl = pipeClient(t, lsptest.Options{Refs: true})
+	if err := cl.Initialize(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	if !cl.Capabilities().References {
+		t.Fatal("referencesProvider not read")
+	}
+	uri := lsp.PathToURI(file)
+	cl.DidOpen(uri, "powershell", 1, src)
+	locs, err := cl.References(ctx, uri, lsp.Position{Line: 3, Character: 9}) // Beta in its declaration
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locs) != 1 || locs[0].URI != uri || locs[0].Range.Start != (lsp.Position{Line: 1, Character: 2}) {
+		t.Fatalf("locations = %+v", locs)
+	}
 }

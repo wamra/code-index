@@ -41,7 +41,8 @@ type Language struct {
 	LanguageID      string            `json:"language_id,omitempty"`
 	StartupTimeoutS int               `json:"startup_timeout_s,omitempty"`
 	RequestTimeoutS int               `json:"request_timeout_s,omitempty"`
-	// Extractor names an optional AST extractor (reserved; unused in milestone 1).
+	// Extractor names an optional AST extractor run next to the language server
+	// ("powershell-ast": call graph, aliases and dynamic calls from the PowerShell parser).
 	Extractor string `json:"extractor,omitempty"`
 }
 
@@ -233,6 +234,9 @@ func (c Config) Validate() error {
 		if l.Command == "" {
 			return fmt.Errorf("languages.%s.command is required", name)
 		}
+		if l.Extractor != "" && l.Extractor != "powershell-ast" {
+			return fmt.Errorf("languages.%s.extractor: unknown extractor %q (known: powershell-ast)", name, l.Extractor)
+		}
 		if len(l.Extensions) == 0 {
 			return fmt.Errorf("languages.%s.extensions is required", name)
 		}
@@ -396,6 +400,7 @@ func Discover(home string, lookPath func(string) (string, error)) map[string]Lan
 				Extensions:      []string{".ps1", ".psm1", ".psd1"},
 				LanguageID:      "powershell",
 				StartupTimeoutS: 120,
+				Extractor:       "powershell-ast",
 			}
 		}
 	}

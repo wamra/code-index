@@ -159,6 +159,12 @@ func TestDiscover(t *testing.T) {
 	if ps.Command != "pwsh" || ps.Args[len(ps.Args)-1] != script {
 		t.Errorf("powershell entry: %+v", ps)
 	}
+	if ps.Extractor != "powershell-ast" || got["bash"].Extractor != "" {
+		t.Errorf("extractors: powershell %q, bash %q", ps.Extractor, got["bash"].Extractor)
+	}
+	if b := Init(map[string]Language{"powershell": ps}); !strings.Contains(string(b), `"extractor": "powershell-ast"`) {
+		t.Errorf("config init must write the extractor:\n%s", b)
+	}
 	// no pwsh script installed -> no powershell entry
 	if _, ok := Discover(t.TempDir(), look)["powershell"]; ok {
 		t.Error("powershell must need the start script")
@@ -214,5 +220,16 @@ func TestLayeredMerge(t *testing.T) {
 	os.WriteFile(r, []byte(`{"nope":1}`), 0o644)
 	if _, _, err := LoadLayered(g, r, env(nil)); err == nil || !strings.Contains(err.Error(), r) {
 		t.Errorf("bad repo file: %v", err)
+	}
+}
+
+func TestUnknownExtractorIsRejected(t *testing.T) {
+	c := Config{Languages: map[string]Language{"x": {Command: "c", Extensions: []string{".x"}, Extractor: "nope"}}}
+	if err := c.Resolved().Validate(); err == nil || !strings.Contains(err.Error(), "unknown extractor") {
+		t.Errorf("Validate = %v", err)
+	}
+	c.Languages["x"] = Language{Command: "c", Extensions: []string{".x"}, Extractor: "powershell-ast"}
+	if err := c.Resolved().Validate(); err != nil {
+		t.Errorf("Validate = %v", err)
 	}
 }

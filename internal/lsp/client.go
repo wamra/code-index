@@ -35,6 +35,7 @@ type Spec struct {
 type Capabilities struct {
 	DocumentSymbol bool
 	Hover          bool
+	References     bool
 }
 
 // Client talks to one language server process.
@@ -302,6 +303,7 @@ func (cl *Client) Initialize(ctx context.Context, root string) error {
 				"synchronization": map[string]any{"didSave": false},
 				"documentSymbol":  map[string]any{"hierarchicalDocumentSymbolSupport": true},
 				"hover":           map[string]any{"contentFormat": []string{"markdown", "plaintext"}},
+				"references":      map[string]any{},
 			},
 		},
 	}
@@ -315,6 +317,7 @@ func (cl *Client) Initialize(ctx context.Context, root string) error {
 		Capabilities struct {
 			DocumentSymbolProvider json.RawMessage `json:"documentSymbolProvider"`
 			HoverProvider          json.RawMessage `json:"hoverProvider"`
+			ReferencesProvider     json.RawMessage `json:"referencesProvider"`
 		} `json:"capabilities"`
 		ServerInfo struct {
 			Name    string `json:"name"`
@@ -327,6 +330,7 @@ func (cl *Client) Initialize(ctx context.Context, root string) error {
 	cl.caps = Capabilities{
 		DocumentSymbol: provided(res.Capabilities.DocumentSymbolProvider),
 		Hover:          provided(res.Capabilities.HoverProvider),
+		References:     provided(res.Capabilities.ReferencesProvider),
 	}
 	cl.ServerName, cl.ServerVersion = res.ServerInfo.Name, res.ServerInfo.Version
 	return cl.Notify("initialized", map[string]any{})
@@ -382,6 +386,50 @@ func (cl *Client) Hover(ctx context.Context, uri string, pos Position) (string, 
 		return "", err
 	}
 	return HoverText(raw), nil
+}
+
+// Location is a range in a document.
+type Location struct {
+	URI   string `json:"uri"`
+	Range Range  `json:"range"`
+}
+
+// References requests textDocument/references at pos, without the declaration.
+// Servers that answer LocationLink-style entries (targetUri/targetRange) are
+// accepted as well.
+func (cl *Client) References(ctx context.Context, uri string, pos Position) ([]Location, error) {
+	if !cl.caps.References {
+		return nil, fmt.Errorf("references: %w", ErrNotAdvertised)
+	}
+	var raw json.RawMessage
+	err := cl.Call(ctx, "textDocument/references", map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     pos,
+		"context":      map[string]any{"includeDeclaration": false},
+	}, &raw)
+	if err != nil {
+		return nil, err
+	}
+	var items []struct {
+		Location
+		TargetURI   string `json:"targetUri"`
+		TargetRange Range  `json:"targetSelectionRange"`
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, fmt.Errorf("references result: %w", err)
+	}
+	out := make([]Location, 0, len(items))
+	for _, it := range items {
+		if it.URI == "" && it.TargetURI != "" {
+			out = append(out, Location{URI: it.TargetURI, Range: it.TargetRange})
+			continue
+		}
+		out = append(out, it.Location)
+	}
+	return out, nil
 }
 
 // Close shuts the server down: shutdown request, exit notification, then the
