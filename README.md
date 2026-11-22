@@ -165,15 +165,16 @@ file changed since it was indexed.
   becomes a `calls` edge from the innermost function, method or class that
   contains it, or from the file for top-level code; the declaration itself is
   skipped. Source `lsp`, confidence `exact`.
-- **PowerShell AST extractor** (`"extractor": "powershell-ast"`). One `pwsh` run
-  over the `.ps1` and `.psm1` files of the language, using the PowerShell
-  parser. It adds: calls through aliases (`Set-Alias`, `New-Alias`, `[Alias()]`;
+- **PowerShell AST extractor** (`"extractor": "powershell-ast"`). One PowerShell run
+  (PowerShell 7 `pwsh`, or Windows PowerShell 5.1 `powershell` when `pwsh` is
+  absent; `CODE_INDEX_POWERSHELL` overrides the interpreter) over the `.ps1`
+  and `.psm1` files of the language, using the PowerShell parser. It adds: calls through aliases (`Set-Alias`, `New-Alias`, `[Alias()]`;
   confidence `alias`, the alias becomes a symbol of kind `alias` with an
   `alias_of` edge), dynamic calls (`& $var`, `Invoke-Expression`; confidence
   `dynamic`, the expression text is kept), and `dot_sources` / `imports` edges
   between files. Only names that resolve to a workspace function or alias become
   call edges; Get-Process, Write-Host and other built-ins are not stored. Without
-  `pwsh` the extractor is skipped with one note. When both sources report the
+  either interpreter the extractor is skipped with one note. When both sources report the
   same call the row has source `lsp+ast`.
 
 Edges of a language are recomputed whenever one of its files changed or was

@@ -71,6 +71,28 @@ func parseASTLines(r io.Reader) (recs []astRec, skipped int, err error) {
 	return recs, skipped, sc.Err()
 }
 
+// PowerShellEnv names an environment variable that overrides the PowerShell
+// interpreter (a path or a name on PATH).
+const PowerShellEnv = "CODE_INDEX_POWERSHELL"
+
+// findPowerShell picks the interpreter: the override when set, else pwsh
+// (PowerShell 7), else powershell (Windows PowerShell 5.1).
+func findPowerShell(override string, lookPath func(string) (string, error)) (string, error) {
+	if override != "" {
+		p, err := lookPath(override)
+		if err != nil {
+			return "", fmt.Errorf("%w: %s=%q was not found", ErrExtractorUnavailable, PowerShellEnv, override)
+		}
+		return p, nil
+	}
+	for _, name := range []string{"pwsh", "powershell"} {
+		if p, err := lookPath(name); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("%w: neither pwsh nor powershell is on PATH", ErrExtractorUnavailable)
+}
+
 // defaultExtract runs an extractor script embedded in the binary. The script
 // is written to <user cache dir>/code-index/extractors/ (named by its hash, so
 // an upgrade never runs a stale copy) and executed once for all files.
@@ -78,9 +100,9 @@ func defaultExtract(ctx context.Context, name string, files []string) ([]byte, e
 	if name != ExtractorPowerShellAST {
 		return nil, fmt.Errorf("unknown extractor %q", name)
 	}
-	pwsh, err := exec.LookPath("pwsh")
+	pwsh, err := findPowerShell(os.Getenv(PowerShellEnv), exec.LookPath)
 	if err != nil {
-		return nil, fmt.Errorf("%w: pwsh is not on PATH", ErrExtractorUnavailable)
+		return nil, err
 	}
 	base, err := os.UserCacheDir()
 	if err != nil {
@@ -122,7 +144,7 @@ func defaultExtract(ctx context.Context, name string, files []string) ([]byte, e
 		if len(msg) > 300 {
 			msg = msg[:300]
 		}
-		return nil, fmt.Errorf("pwsh extractor: %w: %s", err, msg)
+		return nil, fmt.Errorf("powershell extractor: %w: %s", err, msg)
 	}
 	return stdout.Bytes(), nil
 }

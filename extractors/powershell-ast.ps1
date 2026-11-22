@@ -1,5 +1,9 @@
 # code-index PowerShell AST extractor.
 #
+# Runs under PowerShell 7 (pwsh) and Windows PowerShell 5.1 (powershell.exe).
+# Keep this file ASCII-only and free of PowerShell 7-only syntax: 5.1 reads a
+# BOM-less script as ANSI, and a test enforces both.
+#
 # Usage: pwsh -NoLogo -NoProfile -File powershell-ast.ps1 -ListFile <file>
 # ListFile holds one absolute script path per line. For every file the script
 # parses it with the PowerShell language parser and writes one JSON object per
@@ -15,11 +19,13 @@
 param([Parameter(Mandatory)][string]$ListFile)
 
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$L = 'System.Management.Automation.Language'
+$Utf8 = New-Object System.Text.UTF8Encoding($false)
+# Raw UTF-8 bytes to stdout: independent of the console code page (5.1 defaults to OEM/ANSI).
+$Stdout = [Console]::OpenStandardOutput()
 
 function Emit([hashtable]$o) {
-    [Console]::Out.WriteLine(($o | ConvertTo-Json -Compress -Depth 3))
+    $bytes = $Utf8.GetBytes((($o | ConvertTo-Json -Compress -Depth 3) + "`n"))
+    $Stdout.Write($bytes, 0, $bytes.Length)
 }
 
 function Clip([string]$s, [int]$n = 160) {
@@ -74,11 +80,14 @@ $AliasCmds = @('set-alias', 'new-alias', 'sal', 'nal')
 $ImportCmds = @('import-module', 'ipmo')
 $IexCmds = @('invoke-expression', 'iex')
 
-foreach ($path in (Get-Content -LiteralPath $ListFile -Encoding UTF8)) {
+foreach ($path in [System.IO.File]::ReadAllLines($ListFile, $Utf8)) {
     if ([string]::IsNullOrWhiteSpace($path)) { continue }
     try {
         $tokens = $null; $errors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+        # Read as UTF-8 and parse the text: ParseFile would decode a BOM-less file as ANSI on 5.1,
+        # which shifts columns after any non-ASCII character.
+        $text = [System.IO.File]::ReadAllText($path, $Utf8)
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($text, $path, [ref]$tokens, [ref]$errors)
         if ($errors.Count -gt 0) {
             Emit @{ t = 'parse_error'; file = $path; line = 1; col = 1; count = $errors.Count; first = (Clip $errors[0].Message) }
         }
@@ -149,3 +158,4 @@ foreach ($path in (Get-Content -LiteralPath $ListFile -Encoding UTF8)) {
         Emit @{ t = 'error'; file = $path; line = 1; col = 1; message = (Clip $_.Exception.Message) }
     }
 }
+$Stdout.Flush()

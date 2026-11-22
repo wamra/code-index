@@ -2,11 +2,13 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 func TestParseASTLinesFromRecordedSample(t *testing.T) {
@@ -54,12 +56,24 @@ func TestParseASTLinesSkipsNoise(t *testing.T) {
 	}
 }
 
-// The real extractor script, run with the pwsh on this machine. Skipped when
-// pwsh is not installed.
+// The real extractor script, run once per PowerShell on this machine: pwsh
+// (7) and powershell (Windows PowerShell 5.1). Skipped when neither is installed.
 func TestRealPowerShellExtractor(t *testing.T) {
-	if _, err := exec.LookPath("pwsh"); err != nil {
-		t.Skip("pwsh not installed")
+	ran := false
+	for _, interp := range []string{"pwsh", "powershell"} {
+		if _, err := exec.LookPath(interp); err != nil {
+			continue
+		}
+		ran = true
+		t.Run(interp, func(t *testing.T) { realPowerShellExtractor(t, interp) })
 	}
+	if !ran {
+		t.Skip("no PowerShell installed")
+	}
+}
+
+func realPowerShellExtractor(t *testing.T, interp string) {
+	t.Setenv(PowerShellEnv, interp)
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("USERPROFILE", tmp)
@@ -76,7 +90,10 @@ sal gt3 Get-Thing
 Import-Module Things -Force
 & $handler 1
 gt2 -Name x
+Write-Output "h\u00e9llo \u00fcber"; Get-Accent
 `
+	// Raw strings do not decode escapes; keep this file ASCII and decode here.
+	src = strings.NewReplacer(`\u00e9`, "\u00e9", `\u00fc`, "\u00fc").Replace(src)
 	file := filepath.Join(tmp, "t.ps1")
 	if err := os.WriteFile(file, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
@@ -88,6 +105,26 @@ gt2 -Name x
 	recs, skipped, err := parseASTLines(strings.NewReader(string(out)))
 	if err != nil || skipped != 0 {
 		t.Fatalf("skipped=%d err=%v\n%s", skipped, err, out)
+	}
+	// Columns are 1-based UTF-16 units, so a non-ASCII character before a call
+	// must not shift it (5.1 would, if it decoded the file as ANSI).
+	accentLine, accentCol := 0, 0
+	for i, l := range strings.Split(src, "\n") {
+		if j := strings.Index(l, "Get-Accent"); j >= 0 {
+			accentLine, accentCol = i+1, len(utf16.Encode([]rune(l[:j])))+1
+		}
+	}
+	var gotAccent bool
+	for _, r := range recs {
+		if r.T == "call" && r.Name == "Get-Accent" {
+			gotAccent = true
+			if r.Line != accentLine || r.Col != accentCol {
+				t.Errorf("Get-Accent at %d:%d, want %d:%d", r.Line, r.Col, accentLine, accentCol)
+			}
+		}
+	}
+	if !gotAccent {
+		t.Errorf("no call record for Get-Accent in %s", out)
 	}
 	have := map[string]bool{}
 	for _, r := range recs {
@@ -113,5 +150,61 @@ gt2 -Name x
 	}
 	if have["alias:n>Get-Thing"] {
 		t.Error("a parameter [Alias()] is not a command alias")
+	}
+}
+
+func TestFindPowerShell(t *testing.T) {
+	onPath := func(names ...string) func(string) (string, error) {
+		return func(n string) (string, error) {
+			for _, have := range names {
+				if n == have {
+					return "/bin/" + n, nil
+				}
+			}
+			return "", errors.New("not found")
+		}
+	}
+	for _, c := range []struct {
+		name, override string
+		path           []string
+		want           string // empty: ErrExtractorUnavailable
+	}{
+		{"pwsh preferred", "", []string{"pwsh", "powershell"}, "/bin/pwsh"},
+		{"fallback to powershell", "", []string{"powershell"}, "/bin/powershell"},
+		{"neither", "", nil, ""},
+		{"override wins", "powershell", []string{"pwsh", "powershell"}, "/bin/powershell"},
+		{"override path", "/opt/ps/pwsh", []string{"/opt/ps/pwsh"}, "/bin//opt/ps/pwsh"},
+		{"override missing does not fall back", "nope", []string{"pwsh"}, ""},
+	} {
+		got, err := findPowerShell(c.override, onPath(c.path...))
+		if c.want == "" {
+			if !errors.Is(err, ErrExtractorUnavailable) || got != "" {
+				t.Errorf("%s: got %q, %v", c.name, got, err)
+			}
+		} else if err != nil || got != c.want {
+			t.Errorf("%s: got %q, %v want %q", c.name, got, err, c.want)
+		}
+	}
+}
+
+// Windows PowerShell 5.1 reads a BOM-less script as ANSI, so a non-ASCII byte
+// in a shipped script can break parsing there.
+func TestExtractorScriptsAreASCII(t *testing.T) {
+	files, err := filepath.Glob("../../extractors/*.ps1")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no extractor scripts found: %v", err)
+	}
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, b := range data {
+			if b >= 0x80 {
+				line := 1 + strings.Count(string(data[:i]), "\n")
+				t.Errorf("%s:%d: non-ASCII byte 0x%02x", filepath.Base(f), line, b)
+				break
+			}
+		}
 	}
 }

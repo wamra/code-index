@@ -291,10 +291,10 @@ func TestASTExtractorMissingIsSkippedWithOneNote(t *testing.T) {
 	root := copyTree(t, fixturePS)
 	st := openStore(t)
 	missing := func(context.Context, string, []string) ([]byte, error) {
-		return nil, fmt.Errorf("%w: pwsh is not on PATH", indexer.ErrExtractorUnavailable)
+		return nil, fmt.Errorf("%w: neither pwsh nor powershell is on PATH", indexer.ErrExtractorUnavailable)
 	}
 	res := runOpts(t, st, astCfg("refs"), indexer.Options{Root: root, Extract: missing})
-	if len(res.Notes) != 1 || !strings.Contains(res.Notes[0], "pwsh is not on PATH") || !strings.Contains(res.Notes[0], "skipping the AST extractor") {
+	if len(res.Notes) != 1 || !strings.Contains(res.Notes[0], "neither pwsh nor powershell is on PATH") || !strings.Contains(res.Notes[0], "skipping the AST extractor") {
 		t.Fatalf("notes = %v", res.Notes)
 	}
 	if res.Aliases != 0 || res.Edges == 0 || res.Failed != 0 {
