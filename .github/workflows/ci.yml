@@ -29,6 +29,14 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test ./...
+      # The Windows runner has both pwsh and Windows PowerShell 5.1: the extractor must pass under each.
+      - name: PowerShell extractor under pwsh and Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          go test ./internal/indexer -run TestRealPowerShellExtractor -v | tee extractor.log
+          grep -q -- '--- PASS: TestRealPowerShellExtractor/pwsh' extractor.log
+          grep -q -- '--- PASS: TestRealPowerShellExtractor/powershell' extractor.log
 
   # Cross-builds the six release archives and keeps them for a week.
   build:
