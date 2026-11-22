@@ -56,8 +56,8 @@ The binary is self-contained (no CGO).
 
 macOS is the development platform. Linux and Windows run `go vet` and the test
 suite in CI (`.github/workflows/ci.yml`); the tests use a fake language server
-and a fake embedding server. The portability measures: SQLite uses a rollback journal on Windows and WAL
-elsewhere, file URIs and drive letters are handled for Windows, CRLF sources
+and a fake embedding server. The portability measures: SQLite uses a WAL on every platform (on Windows through a patched driver,
+see `go.mod`), file URIs and drive letters are handled for Windows, CRLF sources
 are accepted, server commands resolve through PATH and PATHEXT (`.cmd` shims),
 and paths stored in the index and shown in output always use forward slashes.
 

@@ -151,8 +151,8 @@ func vecBytes(v []float32) []byte {
 }
 
 func TestJournalModePerOS(t *testing.T) {
-	if journalMode("windows") != "DELETE" || journalMode("linux") != "WAL" || journalMode("darwin") != "WAL" {
-		t.Error("rollback journal on Windows only")
+	if journalMode("windows") != "WAL" || journalMode("linux") != "WAL" || journalMode("darwin") != "WAL" {
+		t.Error("WAL on every platform")
 	}
 }
 
