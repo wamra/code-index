@@ -1,10 +1,13 @@
 # code-index
 
-Semantic and identifier search over source code, built on language servers.
+Semantic and identifier search over source code, built on language servers
+and extractors.
 
-`code-index` starts the language server you configure for a language, asks it
-for the symbols of every file (`textDocument/documentSymbol`) and their
-signatures and docs (`textDocument/hover`), and stores them in a local SQLite
+`code-index` gets the symbols of every file, with signatures and docs, from the
+**extractors** you configure for a language: a language server (it asks
+`textDocument/documentSymbol` and `textDocument/hover`) or any program that
+prints symbols and call edges as JSON lines (an `exec` extractor, such as
+`wammybash` for bash). It stores them in a local SQLite
 database with full-text search and, optionally, embeddings. It works with no
 model at all (names, signatures and doc comments through FTS5) and gets better
 when an embedder is configured.
@@ -68,23 +71,35 @@ code-index config init     # writes ~/.config/code-index/config.json
 code-index config          # prints the effective configuration
 ```
 
-`config init` adds an entry for every language server it finds on `PATH`
-(`bash-language-server`, `gopls`, `pyright-langserver`,
-`typescript-language-server`, `rust-analyzer`, `clangd`) and for PowerShell
-Editor Services when `pwsh` is installed and a Claude Code plugin ships a
-`start-pses.ps1` under `~/.claude/plugins/cache`. Edit the file for anything
-else. A language entry has the shape of a Claude Code plugin's `.lsp.json`
-entry:
+`config init` adds a language for every tool it finds: the language servers on
+`PATH` (`bash-language-server`, `gopls`, `pyright-langserver`,
+`typescript-language-server`, `rust-analyzer`, `clangd`), PowerShell Editor
+Services when `pwsh` is installed and a Claude Code plugin ships a
+`start-pses.ps1` under `~/.claude/plugins/cache`, and `wammybash`. When
+`wammybash` is on `PATH` the bash language uses it alone (its function records
+give the symbols and its calls name the file they go to); a
+`bash-language-server` is then left out. Edit the file for anything else.
+
+A language lists its `extensions` and the **extractors** that serve it, and the
+`extractors` section defines them:
 
 ```json
 {
   "languages": {
-    "bash": {
-      "command": "bash-language-server",
-      "args": ["start"],
-      "extensions": [".sh", ".bash"],
-      "language_id": "shellscript",
-      "startup_timeout_s": 120
+    "powershell": { "extensions": [".ps1", ".psm1", ".psd1"], "extractor": ["pses", "powershell-ast"] },
+    "bash":       { "extensions": [".sh", ".bash"], "extractor": "wammybash" }
+  },
+  "extractors": {
+    "pses": {
+      "type": "lsp",
+      "argv": ["pwsh", "-NoLogo", "-NoProfile", "-File", "/path/to/start-pses.ps1"],
+      "language_id": "powershell", "startup_timeout_s": 120
+    },
+    "wammybash": {
+      "type": "exec",
+      "argv": ["wammybash", "extract", "--root", "{root}", "--list-file", "{listFile}"],
+      "version_argv": ["wammybash", "version"],
+      "symbols": true
     }
   },
   "embed": { "provider": "ollama", "model": "embeddinggemma", "enabled": true },
@@ -92,22 +107,42 @@ entry:
 }
 ```
 
+The older shape still works: a language with `command`, `args`, `env`,
+`language_id` and `startup_timeout_s` is a language server (the shape of a Claude
+Code plugin's `.lsp.json` entry), optionally with `"extractor": "powershell-ast"`:
+
+```json
+{ "languages": { "bash": { "command": "bash-language-server", "args": ["start"],
+                           "extensions": [".sh", ".bash"], "language_id": "shellscript" } } }
+```
+
+- `languages.<name>.extractor`: one name or an ordered list. Symbols come from the
+  first extractor that provides them; every extractor that provides call edges
+  is run and its edges are merged. `powershell-ast` is built in (see Call graph).
+- `extractors.<name>`: `type` `lsp` (argv is the server command line) or `exec`
+  (argv is a program that prints JSON-lines records; `{root}`, `{listFile}` and
+  `{embedded:NAME}` are replaced). Optional: `env`, `extensions` (a subset of the
+  language's), `version` or `version_argv` (part of the cache key: a new version
+  re-indexes the language), `command_fallbacks`, `command_env`, `timeout_s`,
+  `symbols` (exec: also provides symbols; default true when it is the language's
+  only extractor), `language_id`, `startup_timeout_s`, `request_timeout_s`.
+  `extractors/README.md` is the full reference, including how to write an exec
+  extractor.
 - `embed`: providers `ollama`, `openai` (any OpenAI-compatible server) and
   `bedrock`. Embeddings are off unless `enabled` is true or a provider/model is
   given. `api_key_env` names an environment variable; keys are never printed.
-- `languages.<name>.extractor`: `"powershell-ast"` runs the PowerShell AST
-  extractor next to the server (see Call graph). `config init` writes it for
-  the powershell entry.
 - `summarize`: parsed, not used yet.
 - `index.ignore`: `.gitignore`-style patterns on top of the `.gitignore` files
   of the workspace. `max_file_size` is in bytes.
 - Environment: `CODE_INDEX_CONFIG` (global config file), `CODE_INDEX_DB`
-  (database file), `CODE_INDEX_EMBED_{PROVIDER,MODEL,BASE_URL}`.
+  (database file), `CODE_INDEX_EMBED_{PROVIDER,MODEL,BASE_URL}`,
+  `CODE_INDEX_CPUPROFILE` (write a CPU profile of the run to this file; read it
+  with `go tool pprof -top code-index FILE`).
 
 ### Per-repo override
 
 `<repo>/.Wammy/config.json` is merged over the global file section by section:
-`languages` per language key; `embed`, `summarize` and `index` are replaced as
+`languages` and `extractors` per key; `embed`, `summarize` and `index` are replaced as
 whole sections when the repo file has them. `code-index config` prints the
 effective configuration with a `_sources` map naming the file each section came
 from (or `default`).
@@ -158,28 +193,51 @@ file changed since it was indexed.
 
 ## Call graph
 
-`index` and `sweep` also build call edges (skip with `--no-edges`):
+`index` and `sweep` also build call edges (skip with `--no-edges`). Every
+extractor that provides edges contributes; each edge records which kind of
+extractor saw it (`source`), how sure it is (`confidence`) and why (`reason`):
 
-- **LSP references.** For every function and method, `textDocument/references`
-  at its name (when the server advertises `referencesProvider`). Each reference
-  becomes a `calls` edge from the innermost function, method or class that
-  contains it, or from the file for top-level code; the declaration itself is
-  skipped. Source `lsp`, confidence `exact`.
-- **PowerShell AST extractor** (`"extractor": "powershell-ast"`). One PowerShell run
-  (PowerShell 7 `pwsh`, or Windows PowerShell 5.1 `powershell` when `pwsh` is
-  absent; `CODE_INDEX_POWERSHELL` overrides the interpreter) over the `.ps1`
-  and `.psm1` files of the language, using the PowerShell parser. It adds: calls through aliases (`Set-Alias`, `New-Alias`, `[Alias()]`;
-  confidence `alias`, the alias becomes a symbol of kind `alias` with an
-  `alias_of` edge), dynamic calls (`& $var`, `Invoke-Expression`; confidence
-  `dynamic`, the expression text is kept), and `dot_sources` / `imports` edges
-  between files. Only names that resolve to a workspace function or alias become
-  call edges; Get-Process, Write-Host and other built-ins are not stored. Without
-  either interpreter the extractor is skipped with one note. When both sources report the
-  same call the row has source `lsp+ast`.
+- **Language servers** (`lsp` extractors). For every function and method, the
+  server is asked who calls it. With `callHierarchy` (`prepareCallHierarchy`,
+  `incomingCalls`) each call site is an edge with confidence `exact` and reason
+  `call-hierarchy`. A server with only `textDocument/references` gives edges with
+  confidence `candidate` and reason `references` (a reference is not necessarily
+  a call); the declaration itself is skipped. Each edge goes from the innermost
+  function, method or class that contains the site, or from the file for
+  top-level code. Source `lsp`.
+- **Exec extractors** (a program that prints JSON-lines records; the PowerShell
+  AST extractor and `wammybash` are two). They give calls, aliases, dynamic calls,
+  `dot_sources` / `imports` edges between files and `invokes` edges (one file
+  running another as a child process). Each call says how sure the extractor is
+  (`exact`, `alias`, `candidate`) and why, and may name the file the callee is
+  defined in, which tells two functions of the same name apart. Source `ast`.
+  - `powershell-ast` (built in; name it in `extractor`) runs one PowerShell
+    (`pwsh`, or Windows PowerShell 5.1 `powershell` when `pwsh` is absent;
+    `CODE_INDEX_POWERSHELL` overrides the interpreter) over the `.ps1` and `.psm1`
+    files with the PowerShell parser. It adds calls through aliases (`Set-Alias`,
+    `New-Alias`, `[Alias()]`; confidence `alias`, the alias becomes a symbol of
+    kind `alias` with an `alias_of` edge), dynamic calls (`& $var`,
+    `Invoke-Expression`; confidence `dynamic`, the expression text is kept) and
+    the file edges. It names a callee only, so a name that resolves to a workspace
+    function or alias becomes an edge; Get-Process, Write-Host and other
+    built-ins are not stored.
+  - `wammybash` (bash) names the file of every callee and says why: `direct`,
+    `alias`, `variable-constant` (`"$cmd"` where `cmd=build_release`),
+    `string-eval` (`eval "build_release y"`), with confidence `exact`, `alias` or
+    `candidate`. A function that exists in two files is attributed to the right
+    one.
+  - A missing command is skipped with one note.
+
+When both kinds report the same call site the row has source `lsp+ast`, and the
+stronger confidence wins (`exact`, then `alias`, then `candidate`), so a
+PowerShell call found by the server (`candidate`) and by the AST extractor
+(`exact`) reads `[lsp+ast exact]`. When an exec extractor names the callee's file,
+a server edge at that site that goes elsewhere is dropped.
 
 Edges of a language are recomputed whenever one of its files changed or was
 deleted (all of them, not only the changed files: a change moves symbol ids and
-who references whom), and once after `--no-edges`. Chunk text gains `calls:` and
+who calls whom), once after `--no-edges`, and in full (the language is re-indexed)
+when an extractor's command line or version changed. Chunk text gains `calls:` and
 `called by:` lines; only chunks whose text changed are re-embedded.
 
 ```
@@ -187,7 +245,17 @@ $ code-index callers Get-Widget
 lib.ps1:10  Invoke-Helper  [lsp+ast exact]
 main.ps1:3  main.ps1 (top level)  [lsp+ast exact]
 main.ps1:4  main.ps1 (top level) (via gw)  [ast alias]
+
+$ code-index callers lib/util.sh:4        # build_release; the bare name is ambiguous
+dyn.sh:4  dyn.sh (top level)  [ast exact direct]
+main.sh:6  deploy  [ast exact direct]
+main.sh:7  deploy (via build_release)  [ast alias alias]
+main.sh:9  deploy  [ast candidate variable-constant]
+main.sh:10  deploy  [ast candidate string-eval]
 ```
+
+The tag is `[source confidence]`, or `[source confidence reason]` when the extractor
+gave a reason.
 
 `impact` follows callers up to `--depth` levels (default 3, cycles are followed
 once); `path` prints the shortest chain of calls. `callees` accepts a file path
@@ -201,8 +269,13 @@ go vet ./...
 go test ./...
 ```
 
-The tests use a fake language server (the test binary itself) and a fake
-Ollama HTTP server, so they need neither a real language server nor a network.
+The tests use a fake language server (the test binary itself), recorded
+extractor output and a fake Ollama HTTP server, so they need neither a real
+language server, `wammybash` nor a network. Optional tests against the real tools:
+`CODE_INDEX_REAL_WAMMYBASH=/path/to/wammybash go test ./cmd/code-index -run
+TestRealWammybash`, `CODE_INDEX_REAL_LSP=gopls go test ./internal/extract -run
+Real`. `go test ./internal/indexer -run '^$' -bench RunSynthetic -cpuprofile
+cpu.out` profiles an index run over 2000 generated files.
 
 ## Smoke test
 

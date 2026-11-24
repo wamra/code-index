@@ -45,7 +45,7 @@ type Language struct {
 	// of names, defined in Config.Extractors or built in ("powershell-ast": call
 	// graph, aliases and dynamic calls from the PowerShell parser). With the
 	// legacy Command field set, the language server is an implicit lsp
-	// extractor that runs first (docs/extractors.md).
+	// extractor that runs first (extractors/README.md).
 	Extractor ExtractorNames `json:"extractor,omitempty"`
 }
 

@@ -118,7 +118,7 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 		hasVec = true
 	}
 
-	// Cache key of each language's edges (docs/extractors.md section 5). The
+	// Cache key of each language's edges (extractors/README.md section 5). The
 	// stored value is "" (edges only), the current fingerprint (up to date) or
 	// anything else (an older fingerprint or the legacy "1"): the language is
 	// fully stale and all its files are re-indexed.
@@ -377,16 +377,12 @@ func nullIf(s string) any {
 
 // Values of symbols.source.
 const (
-	symSourceLSP     = "lsp"     // from a language server's documentSymbol
+	symSourceLSP     = "lsp"     // only in indexes made before extractors: symbols from a language server's documentSymbol
 	symSourceAST     = "ast"     // alias symbols made with the edges; deleteLangEdges removes them on every rebuild
 	symSourceExtract = "extract" // from the symbol/func records of an extractor
 )
 
-func writeFile(ctx context.Context, st *store.Store, c candidate, sha string, oldID int64, hasVec bool, syms []flatSym) (fileStats, error) {
-	return writeFileSource(ctx, st, c, sha, oldID, hasVec, syms, symSourceLSP)
-}
-
-// writeFileSource is writeFile with the symbols.source value to store.
+// writeFileSource replaces the rows of a file with its symbols, storing source as symbols.source.
 func writeFileSource(ctx context.Context, st *store.Store, c candidate, sha string, oldID int64, hasVec bool, syms []flatSym, source string) (fileStats, error) {
 	var fs fileStats
 	tx, err := st.DB().BeginTx(ctx, nil)

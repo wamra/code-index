@@ -118,14 +118,14 @@ type Session interface {
 	// Symbols is phase 1. files are absolute paths of the files that changed;
 	// emit receives the symbol and func records of each (plus error and
 	// parse_error records) with Parent ordinals, as documented in
-	// docs/extractors.md. Not called when Provides().Symbols is false.
+	// extractors/README.md. Not called when Provides().Symbols is false.
 	Symbols(ctx context.Context, files []string, emit Emit) error
 	// Edges is phase 2. files are the absolute paths of ALL indexed files of the
 	// language that the extractor is given (its "extensions" filter applied).
 	// known holds the symbol records of every indexed file of the language, as
 	// built by the indexer from its symbols table, including the files phase 1
 	// just re-indexed and the files this extractor never saw (see
-	// docs/extractors.md for the guaranteed keys). emit receives the call, alias,
+	// extractors/README.md for the guaranteed keys). emit receives the call, alias,
 	// dynamic, dotsource, import, invoke, parse_error and error records of
 	// each file; records are attributed to the file of the call site.
 	// Not called when Provides().Edges is false.

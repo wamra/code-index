@@ -9,7 +9,7 @@ import (
 	"github.com/wamra/code-index/extractors"
 )
 
-// Defaults of the extractor fields (docs/extractors.md, section 4.2).
+// Defaults of the extractor fields (extractors/README.md, section 4.2).
 const (
 	DefaultExecTimeoutS = 600
 	DefaultStartupS     = 120
@@ -50,7 +50,7 @@ func (e Extractor) withDefaults() Extractor {
 	return e
 }
 
-// resolveExtractors normalises extractors and languages (docs/extractors.md 4.4):
+// resolveExtractors normalises extractors and languages (extractors/README.md 4.4):
 //   - a language with Command and no lsp extractor among its names gets an
 //     implicit lsp extractor "<lang>-lsp" placed first;
 //   - a language without Command gets the legacy fields of its first lsp

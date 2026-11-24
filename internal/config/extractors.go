@@ -19,7 +19,7 @@ const BuiltinPowerShellAST = "powershell-ast"
 
 // Extractor is one entry of the "extractors" section: a way to get symbols
 // and/or call edges for the files of a language. The JSON shape and the
-// meaning of every field are documented in docs/extractors.md. Loading,
+// meaning of every field are documented in extractors/README.md. Loading,
 // default-filling and validation are done by Config.Resolved and
 // Config.Validate (they are not part of this type).
 type Extractor struct {

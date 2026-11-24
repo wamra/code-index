@@ -431,7 +431,7 @@ type astResult struct {
 }
 
 // astEdges turns the extractor records into alias symbols (inserted in tx)
-// and edges (added to set); docs/extractors.md says how each record type is
+// and edges (added to set); extractors/README.md says how each record type is
 // read.
 func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []sourced, set *edgeSet) (astResult, error) {
 	var res astResult

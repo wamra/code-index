@@ -55,7 +55,7 @@ func TestExtractorNamesJSON(t *testing.T) {
 	}
 }
 
-// The example config of docs/extractors.md decodes with DisallowUnknownFields.
+// The example config of extractors/README.md decodes with DisallowUnknownFields.
 func TestExtractorsConfigExampleDecodes(t *testing.T) {
 	const doc = `{
   "languages": {

@@ -75,7 +75,7 @@ function formatHits(stdout: string): string {
 }
 
 // "callers", "callees" and "impact" print one line per call edge:
-// path:line  name  [source confidence]. The symbol goes after "--" like the search query.
+// path:line  name  [source confidence reason]. The symbol goes after "--" like the search query.
 function graphArgv(cmd: 'callers' | 'callees' | 'impact', i: GraphInput): string[] {
   const argv: string[] = [cmd]
   if (cmd === 'impact') argv.push('--depth', String(Math.min(Math.max(Math.trunc(i.depth ?? 3) || 3, 1), 10)))
@@ -154,14 +154,14 @@ export const register: Register = (on, options) => {
     await $.tool.register({
       name: 'callers',
       description:
-        "List who calls a symbol, from the call graph in the code index (language server references plus, for PowerShell, the AST extractor). One line per call site: path:line, the calling function (or the file for top-level code), and [source confidence]: exact is a resolved call, alias went through an alias, dynamic cannot be resolved statically. Use it before changing a function, instead of grepping for its name.",
+        "List who calls a symbol, from the call graph in the code index (the language's extractors: a language server's call hierarchy or references, and exec extractors such as the PowerShell parser or wammybash). One line per call site: path:line, the calling function (or the file for top-level code), and [source confidence reason]: exact is a resolved call, alias went through an alias, candidate may be the call (check it), dynamic cannot be resolved statically; the reason says why. Use it before changing a function, instead of grepping for its name.",
       inputSchema: { type: 'object', properties: { symbol: SYMBOL, repo: REPO }, required: ['symbol'] },
       isDeferred: false,
     })
     await $.tool.register({
       name: 'callees',
       description:
-        "List what a function calls, from the call graph in the code index: one line per call site with path:line, the callee and [source confidence]. Pass a file path to list the calls made at the top level of that file; dynamic calls (& $var, Invoke-Expression) show their expression with confidence dynamic.",
+        "List what a function calls, from the call graph in the code index: one line per call site with path:line, the callee and [source confidence reason]. Pass a file path to list the calls made at the top level of that file; dynamic calls (& $var, Invoke-Expression) show their expression with confidence dynamic.",
       inputSchema: { type: 'object', properties: { symbol: SYMBOL, repo: REPO }, required: ['symbol'] },
       isDeferred: false,
     })

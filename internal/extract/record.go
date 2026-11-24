@@ -1,6 +1,6 @@
 // Package extract defines the contract between code-index and its extractors:
 // the JSON-lines record schema (version 2), the Extractor interface the
-// indexer drives, and the cache fingerprint. See docs/extractors.md.
+// indexer drives, and the cache fingerprint. See extractors/README.md.
 package extract
 
 import (
@@ -32,7 +32,7 @@ const (
 // SelLine, SelCol, ToLine and ToCol are 1-based; columns count UTF-16 code
 // units. File and every path-valued key (Path, To) are absolute. Keys that
 // do not apply to a record type are absent. Which keys each type reads, and
-// which are required, is the table in docs/extractors.md.
+// which are required, is the table in extractors/README.md.
 type Record struct {
 	T       string `json:"t"`
 	File    string `json:"file,omitempty"`

@@ -10,11 +10,12 @@ import (
 	"github.com/wamra/code-index/internal/lsp"
 )
 
-// The helpers in this file are the symbol-shaping steps the indexer applies to
-// a documentSymbol answer (flatten, normalizeNames, locateName and their
-// helpers in internal/indexer/symbols.go). internal/extract cannot import the
-// indexer, so they are kept here with the same behaviour; a change in one
-// must be made in the other until the merge wave moves them to a shared place.
+// The helpers in this file shape a documentSymbol answer into records
+// (flattenSymbols, normalizeNames, locateName). internal/extract cannot import
+// the indexer, and the indexer's recordSymbols keeps its own copies of
+// locateName, indexWord, byteIndexOfUTF16 and rangeText (internal/indexer/symbols.go)
+// for symbol records that lack a name position: a change to those four must be
+// made in both places.
 
 // lspSym is a symbol with its parent resolved and its qualified name built.
 type lspSym struct {

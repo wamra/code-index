@@ -3,7 +3,6 @@ package indexer
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf16"
@@ -20,67 +19,6 @@ type flatSym struct {
 	Signature string
 	Doc       string
 	BodySHA   string
-}
-
-// flatten turns a documentSymbol response (hierarchical or flat) into a
-// parent-before-child ordered slice.
-func flatten(syms []lsp.Symbol) []flatSym {
-	var out []flatSym
-	var rec func(list []lsp.Symbol, parent int, prefix string)
-	rec = func(list []lsp.Symbol, parent int, prefix string) {
-		for _, s := range list {
-			q := s.Name
-			if prefix != "" {
-				q = prefix + "." + s.Name
-			}
-			out = append(out, flatSym{Symbol: s, Parent: parent, Qualified: q})
-			idx := len(out) - 1
-			out[idx].Children = nil
-			rec(s.Children, idx, q)
-		}
-	}
-	hier := false
-	for _, s := range syms {
-		if len(s.Children) > 0 {
-			hier = true
-		}
-	}
-	if hier {
-		rec(syms, -1, "")
-		return out
-	}
-	// Flat list: order by position so parents precede children, then find the
-	// innermost enclosing symbol by range containment.
-	list := append([]lsp.Symbol(nil), syms...)
-	sort.SliceStable(list, func(i, j int) bool {
-		a, b := list[i].Range.Start, list[j].Range.Start
-		if a.Line != b.Line {
-			return a.Line < b.Line
-		}
-		if a.Character != b.Character {
-			return a.Character < b.Character
-		}
-		// larger range first
-		return list[i].Range.End.Line > list[j].Range.End.Line
-	})
-	for i, s := range list {
-		parent := -1
-		for j := i - 1; j >= 0; j-- {
-			if list[j].Range.ContainsRange(s.Range) && list[j].Range != s.Range {
-				parent = j
-				break
-			}
-		}
-		q := s.Name
-		switch {
-		case parent >= 0:
-			q = out[parent].Qualified + "." + s.Name
-		case s.ContainerName != "":
-			q = s.ContainerName + "." + s.Name
-		}
-		out = append(out, flatSym{Symbol: s, Parent: parent, Qualified: q})
-	}
-	return out
 }
 
 // utf16Col converts a rune-offset-free byte index within line to a UTF-16 column.
@@ -270,27 +208,6 @@ func declarationLine(lines []string, startLine int) string {
 	t := strings.TrimSpace(lines[startLine])
 	t = strings.TrimSpace(strings.TrimSuffix(t, "{"))
 	return oneLine(t, 200)
-}
-
-// normalizeNames replaces display-label names with the identifier the server
-// selected. PowerShell Editor Services, for one, reports a function as
-// "function Get-Widget ()" and puts the real name in selectionRange. The rule
-// is deliberately narrow: only labels that contain whitespace, whose
-// single-line selection text does not. The original label is kept as detail
-// (it becomes the signature fallback).
-func normalizeNames(syms []lsp.Symbol, lines []string) {
-	for i := range syms {
-		s := &syms[i]
-		if s.SelectionRange != s.Range && strings.ContainsAny(s.Name, " \t") {
-			if t, ok := rangeText(lines, s.SelectionRange); ok && t != "" && !strings.ContainsAny(t, " \t") && t != s.Name {
-				if s.Detail == "" {
-					s.Detail = s.Name
-				}
-				s.Name = t
-			}
-		}
-		normalizeNames(s.Children, lines)
-	}
 }
 
 // rangeText returns the text of a single-line range.
