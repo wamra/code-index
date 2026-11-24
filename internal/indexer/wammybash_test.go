@@ -235,3 +235,32 @@ func TestExecWithoutSymbolsProvider(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 }
+
+// A changed file outside the symbols extractor's extensions is stored without
+// symbols, and the extractor is not run for an empty list.
+func TestFilesOutsideSymbolExtensionsAreStoredEmpty(t *testing.T) {
+	root := tree(t, map[string]string{"a.sh": "f() { :; }\n", "b.bash": "g() { :; }\n"})
+	cfg := bashExecCfg()
+	ex := cfg.Extractors["wammybash"]
+	ex.Extensions = []string{".sh"}
+	cfg.Extractors["wammybash"] = ex
+	st := openStore(t)
+	runs := 0
+	res := runOpts(t, st, cfg, indexer.Options{Root: root, Extract: func(_ context.Context, _ string, files []string) ([]byte, error) {
+		runs++
+		var out []string
+		for _, f := range files {
+			if strings.HasSuffix(f, "b.bash") {
+				t.Errorf("b.bash must not reach the extractor: %v", files)
+			}
+			out = append(out, fmt.Sprintf(`{"t":"func","file":%q,"name":"f","line":1,"col":1,"endLine":1,"endCol":11}`, f))
+		}
+		return []byte(strings.Join(out, "\n") + "\n"), nil
+	}})
+	if res.Indexed != 2 || res.Failed != 0 || res.Symbols != 1 || runs != 1 {
+		t.Fatalf("result = %+v, runs %d", res, runs)
+	}
+	if got := scalar(t, st, `SELECT count(*) FROM files WHERE path='b.bash' AND status='ok'`); got != "1" {
+		t.Errorf("b.bash status ok rows = %s", got)
+	}
+}

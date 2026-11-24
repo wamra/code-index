@@ -178,7 +178,10 @@ func indexItems(ctx context.Context, st *store.Store, o Options, lang string, sy
 		}
 		return commit(w, recs)
 	}
-	err := sym.sess.Symbols(ctx, give, emit)
+	var err error
+	if len(give) > 0 { // an empty list must not reach an extractor (it might mean "everything")
+		err = sym.sess.Symbols(ctx, give, emit)
+	}
 	if ctx.Err() != nil {
 		return
 	}
