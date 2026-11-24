@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/wamra/code-index/internal/config"
+	"github.com/wamra/code-index/internal/proctest"
 )
 
 func waitGone(t *testing.T, pidfile string) {
@@ -25,16 +25,13 @@ func waitGone(t *testing.T, pidfile string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	alive := func() bool { return syscall.Kill(pid, 0) == nil }
 	defer func() {
-		if alive() {
-			syscall.Kill(pid, syscall.SIGKILL) // do not leak it from a failing test
+		if proctest.Alive(pid) {
+			proctest.Kill(pid) // do not leak it from a failing test
 		}
 	}()
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-		if !alive() {
-			return
-		}
+	if proctest.WaitGone(pid, 3*time.Second) {
+		return
 	}
 	t.Errorf("grandchild %d is still running after the extractor timed out", pid)
 }
@@ -78,3 +75,7 @@ func TestVersionTimeoutKillsGrandchildren(t *testing.T) {
 	}
 	waitGone(t, pidfile)
 }
+
+// cleanupDaemon asserts the leftover process was stopped (the process group is
+// killed on unix), and kills it if not.
+func cleanupDaemon(t *testing.T, pidfile string) { waitGone(t, pidfile) }

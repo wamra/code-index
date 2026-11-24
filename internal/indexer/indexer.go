@@ -35,7 +35,8 @@ type Options struct {
 	EmptyRetryDelays []time.Duration
 	// NoEdges skips call-graph edges (LSP references and AST extractors).
 	NoEdges bool
-	// Extract runs an AST extractor; nil means the embedded script run with pwsh.
+	// Extract replaces the subprocess of every exec extractor (a test seam, see
+	// extract.ExecFunc); nil means each exec extractor runs its configured command.
 	Extract ExtractFunc
 }
 

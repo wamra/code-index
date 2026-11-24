@@ -377,6 +377,16 @@ Rules for a session:
   not survive; a 2 s `WaitDelay` is the backstop for inherited pipes. **On Windows
   only the direct child is killed**: a grandchild it started keeps running, and a
   grandchild that holds the stdout pipe open can delay the return by that delay.
+- An extractor that exits 0 but leaves a process holding stdout (a daemon) is not a
+  failure: when the 2 s `WaitDelay` expires after a successful exit, the output
+  gathered so far is used, the process group is killed (unix) and one run-log line
+  says so.
+- `code-index index` and `sweep` stop on SIGINT, and on unix also on SIGTERM and
+  SIGHUP (terminal close, `timeout`, CI cancel): the run cancels its context, which
+  kills the extractor's process group, then exits non-zero; the lock is released and
+  the files not reached stay retryable. Without this the separate process group
+  would leave the extractor running until `timeout_s`. Windows handles the
+  interrupt only.
 - A non-zero exit returns `extractor "<name>": exit status N: <last 300 characters of stderr>`.
 - Records are matched to requested files by exact string, then cleaned path, then
   case-folded path (when unambiguous); `Record.File` is rewritten to the requested

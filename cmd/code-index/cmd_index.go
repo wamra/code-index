@@ -85,7 +85,7 @@ func runIndex(st *store.Store, root string, force, doEmbed, quiet, noEdges bool,
 	if len(cfg.Languages) == 0 {
 		return fail(errw, "index: no languages configured in %s; run `code-index config init`", configPath())
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), stopSignals...)
 	defer stop()
 	var logw io.Writer = errw
 	if quiet {

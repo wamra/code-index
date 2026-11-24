@@ -78,6 +78,15 @@ func helperMain() {
 		out, _ := json.Marshal(map[string]any{"t": "func", "file": path, "name": "F", "line": 1, "col": 1})
 		fmt.Println(string(out))
 	}
+	if mode == "daemon" { // exit 0 with complete output, leaving a process that holds stdout
+		c := exec.Command(os.Args[0], "-test.run=^$")
+		c.Env = append(os.Environ(), "EXTRACT_TEST_HELPER=sleep")
+		c.Stdout, c.Stderr = os.Stdout, os.Stderr
+		if err := c.Start(); err == nil {
+			os.WriteFile(os.Getenv("EXTRACT_TEST_PIDFILE"), []byte(strconv.Itoa(c.Process.Pid)), 0o644)
+		}
+		return
+	}
 	switch mode {
 	case "noise":
 		fmt.Println("WARNING: noise")
@@ -460,4 +469,31 @@ func TestExecLiteralBracesReachTheSubprocess(t *testing.T) {
 	if !strings.HasSuffix(recs[0].In, "|awk '{print $1}'|{}|{nope}") {
 		t.Errorf("args = %q", recs[0].In)
 	}
+}
+
+// An extractor that exits 0 after printing its records but leaves a process
+// holding stdout (a daemon) is not a failure: the output is used.
+func TestExecExitZeroWithLingeringStdoutHolderKeepsOutput(t *testing.T) {
+	root := t.TempDir()
+	pidfile := filepath.Join(t.TempDir(), "daemon.pid")
+	ec := helperEC("daemon")
+	ec.Env["EXTRACT_TEST_PIDFILE"] = pidfile
+	var logs []string
+	env := Env{Root: root, Logf: func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }}
+	files := []string{filepath.Join(root, "a.x")}
+	start := time.Now()
+	g, _, err := runEdges(t, ec, env, files)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(g[files[0]]) != 1 {
+		t.Errorf("records = %v", g)
+	}
+	if len(logs) != 1 || !strings.Contains(logs[0], "kept its output open") {
+		t.Errorf("logs = %q", logs)
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Errorf("took %v", time.Since(start))
+	}
+	cleanupDaemon(t, pidfile)
 }

@@ -24,6 +24,10 @@ func TestMain(m *testing.M) {
 	if extractest.Main() {
 		return
 	}
+	if os.Getenv("CODE_INDEX_TEST_CLI") == "1" { // the test binary as the CLI
+		main()
+		return
+	}
 	os.Exit(m.Run())
 }
 

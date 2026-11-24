@@ -318,7 +318,16 @@ func (s *execSession) subprocess(ctx context.Context, files []string) ([]byte, e
 	var stdout bytes.Buffer
 	stderr := &tailBuffer{max: stderrTail * 4}
 	cmd.Stdout, cmd.Stderr = &stdout, stderr
-	if err := cmd.Run(); err != nil {
+	err = cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+		// The extractor exited 0 and printed its output, but a process it
+		// started still holds stdout (a daemon). The output is complete: keep
+		// it, and stop what is left (unix: the process group).
+		killGroup(cmd)
+		s.logf("  %s: a process started by the extractor kept its output open; using the output and stopping it", s.e.name)
+		err = nil
+	}
+	if err != nil {
 		switch {
 		case ctx.Err() != nil:
 			return nil, ctx.Err()
