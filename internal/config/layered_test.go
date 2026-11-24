@@ -43,7 +43,7 @@ func TestRepoFileCannotTrustItself(t *testing.T) {
 	for name, central := range map[string]string{
 		"no central entry":   `{}`,
 		"entry not trusted":  `{"repos":{"@ROOT@":{"trust_repo_config":false}}}`,
-		"other repo trusted": `{"repos":{"/somewhere/else":{"trust_repo_config":true}}}`,
+		"other repo trusted": `{"repos":{"~/somewhere/else":{"trust_repo_config":true}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -89,7 +89,7 @@ func TestRepoPlacementErrors(t *testing.T) {
 		{"top-level trust", `{"trust_repo_config":true}`, "trust_repo_config is only allowed inside a repos entry"},
 		{"top-level trust false", `{"trust_repo_config":false}`, "trust_repo_config is only allowed inside a repos entry"},
 		{"relative key", `{"repos":{"proj":{}}}`, `repos."proj": the key must be an absolute path`},
-		{"same directory", `{"repos":{"/a/b":{},"/a/b/../b/":{}}}`, "are the same directory"},
+		{"same directory", `{"repos":{"~/a/b":{},"~/a/b/../b/":{}}}`, "are the same directory"},
 	}
 	for _, c := range cases {
 		cp, root := layeredSetup(t, c.central, "")
@@ -236,7 +236,8 @@ func TestCentralReposEntry(t *testing.T) {
 	eff := string(Effective(c, src, env(nil)))
 	var top map[string]json.RawMessage
 	json.Unmarshal([]byte(eff), &top)
-	if _, dumped := top["repos"]; dumped || !strings.Contains(eff, `"_repo_config": "untrusted: `+entry) {
+	qe, _ := json.Marshal(entry) // Effective is JSON: a Windows path has its backslashes escaped
+	if _, dumped := top["repos"]; dumped || !strings.Contains(eff, `"_repo_config": "untrusted: `+string(qe[1:len(qe)-1])) {
 		t.Errorf("Effective:\n%s", eff)
 	}
 }
