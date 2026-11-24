@@ -156,13 +156,14 @@ func TestIndexKeepsAnIgnoredSIGHUPIgnored(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	ext := readPID(t, extPID, 15*time.Second)
+	var ext int
 	defer func() {
-		if proctest.Alive(ext) {
+		if ext > 0 && proctest.Alive(ext) {
 			proctest.Kill(ext)
 		}
 		cmd.Process.Kill()
 	}()
+	ext = readPID(t, extPID, 15*time.Second)
 	if err := cmd.Process.Signal(syscall.SIGHUP); err != nil {
 		t.Fatal(err)
 	}
