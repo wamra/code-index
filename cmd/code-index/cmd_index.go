@@ -78,7 +78,8 @@ func cmdSweep(args []string, out, errw io.Writer) int {
 }
 
 func runIndex(st *store.Store, root string, force, doEmbed, quiet, noEdges bool, out, errw io.Writer) int {
-	cfg, _, err := loadConfig(root)
+	cfg, _, notes, err := loadConfig(root)
+	printNotes(errw, notes)
 	if err != nil {
 		return fail(errw, "index: %v", err)
 	}

@@ -2,8 +2,6 @@ package config
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -156,12 +154,12 @@ func TestExtractorValidation(t *testing.T) {
 }
 
 func TestLayeredExtractors(t *testing.T) {
-	dir := t.TempDir()
-	g, r := filepath.Join(dir, "g.json"), filepath.Join(dir, "r.json")
-	os.WriteFile(g, []byte(`{"languages":{"a":{"extensions":[".a"],"extractor":["ga","powershell-ast"]}},
-		"extractors":{"ga":{"type":"exec","argv":["g"]},"gb":{"type":"exec","argv":["gb"]}}}`), 0o644)
-	os.WriteFile(r, []byte(`{"extractors":{"ga":{"type":"exec","argv":["repo"],"timeout_s":5},"rc":{"type":"lsp","argv":["rc"]}}}`), 0o644)
-	c, src, err := LoadLayered(g, r, env(nil))
+	g, root := layeredSetup(t, `{"languages":{"a":{"extensions":[".a"],"extractor":["ga","powershell-ast"]}},
+		"extractors":{"ga":{"type":"exec","argv":["g"]},"gb":{"type":"exec","argv":["gb"]}},
+		"repos":{"@ROOT@":{"trust_repo_config":true}}}`,
+		`{"extractors":{"ga":{"type":"exec","argv":["repo"],"timeout_s":5},"rc":{"type":"lsp","argv":["rc"]}}}`)
+	r := RepoPath(root)
+	c, src, _, err := LoadLayered(g, root, env(nil))
 	if err != nil {
 		t.Fatal(err)
 	}

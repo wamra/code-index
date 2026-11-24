@@ -34,17 +34,26 @@ func cwdRoot() string {
 }
 
 // loadConfig returns the effective (resolved, validated) configuration for the
-// repo at root: the global file with <root>/.Wammy/config.json merged over it.
-func loadConfig(root string) (config.Config, config.Sources, error) {
-	c, src, err := config.LoadLayered(configPath(), config.RepoPath(root), os.Getenv)
+// repo at root: the central file, its repos entry for root and
+// <root>/.Wammy/config.json merged (config.LoadLayered). The notes say what the
+// trust rule ignored; callers that print them use printNotes.
+func loadConfig(root string) (config.Config, config.Sources, []string, error) {
+	c, src, notes, err := config.LoadLayered(configPath(), root, os.Getenv)
 	if err != nil {
-		return config.Config{}, nil, err
+		return config.Config{}, nil, nil, err
 	}
 	c = c.Resolved()
 	if err := c.Validate(); err != nil {
-		return config.Config{}, nil, fmt.Errorf("config: %w", err)
+		return config.Config{}, nil, notes, fmt.Errorf("config: %w", err)
 	}
-	return c, src, nil
+	return c, src, notes, nil
+}
+
+// printNotes writes the config notes to w, one per line.
+func printNotes(w io.Writer, notes []string) {
+	for _, n := range notes {
+		fmt.Fprintf(w, "note: %s\n", n)
+	}
 }
 
 // newEmbedder builds the configured embedder, or nil when embeddings are not

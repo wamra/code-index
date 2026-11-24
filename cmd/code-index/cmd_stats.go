@@ -107,14 +107,14 @@ func cmdDoctor(args []string, out, errw io.Writer) int {
 	}
 	ctx := context.Background()
 
-	cfg, csrc, cerr := loadConfig(cwdRoot())
+	cfg, csrc, _, cerr := loadConfig(cwdRoot())
 	if cerr != nil {
 		add("FAIL", "config", "%v", cerr)
 	} else {
 		files := map[string]bool{}
 		for _, f := range csrc {
 			if f != "default" {
-				files[f] = true
+				files[strings.SplitN(f, "#", 2)[0]] = true
 			}
 		}
 		add("ok", "config", "%d language(s); files read: %s", len(cfg.Languages), joinKeys(files))

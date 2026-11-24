@@ -194,16 +194,16 @@ func TestEffectiveNeverPrintsKeys(t *testing.T) {
 }
 
 func TestLayeredMerge(t *testing.T) {
-	dir := t.TempDir()
-	g := filepath.Join(dir, "g.json")
-	r := filepath.Join(dir, "r.json")
-	os.WriteFile(g, []byte(`{"embed":{"provider":"ollama","model":"gm"},"index":{"max_file_size":10},
-		"languages":{"a":{"command":"ga","extensions":[".a"]},"b":{"command":"gb","extensions":[".b"]}}}`), 0o644)
-	os.WriteFile(r, []byte(`{"embed":{"provider":"openai","model":"rm","base_url":"http://r"},
-		"languages":{"b":{"command":"rb","extensions":[".b"]},"c":{"command":"rc","extensions":[".c"]}}}`), 0o644)
-	c, src, err := LoadLayered(g, r, env(nil))
-	if err != nil {
-		t.Fatal(err)
+	// a trusted repo: the in-repo file keeps the full pre-trust-gate behaviour
+	g, root := layeredSetup(t, `{"embed":{"provider":"ollama","model":"gm"},"index":{"max_file_size":10},
+		"languages":{"a":{"command":"ga","extensions":[".a"]},"b":{"command":"gb","extensions":[".b"]}},
+		"repos":{"@ROOT@":{"trust_repo_config":true}}}`,
+		`{"embed":{"provider":"openai","model":"rm","base_url":"http://r"},
+		"languages":{"b":{"command":"rb","extensions":[".b"]},"c":{"command":"rc","extensions":[".c"]}}}`)
+	r := RepoPath(root)
+	c, src, notes, err := LoadLayered(g, root, env(nil))
+	if err != nil || len(notes) != 0 {
+		t.Fatalf("err=%v notes=%v", err, notes)
 	}
 	res := c.Resolved()
 	if res.Embed.Provider != "openai" || res.Embed.Model != "rm" {
@@ -221,14 +221,14 @@ func TestLayeredMerge(t *testing.T) {
 			t.Errorf("source[%s] = %q, want %q", k, src[k], v)
 		}
 	}
-	// a repo file without sections changes nothing; missing files are fine
-	c2, src2, err := LoadLayered(g, filepath.Join(dir, "none.json"), env(nil))
+	// a repo without a file changes nothing; missing files are fine
+	c2, src2, _, err := LoadLayered(g, t.TempDir(), env(nil))
 	if err != nil || src2["embed"] != g || c2.Resolved().Embed.Model != "gm" {
 		t.Errorf("missing repo file: %v %v", err, src2)
 	}
 	// a bad repo file is reported with its path
 	os.WriteFile(r, []byte(`{"nope":1}`), 0o644)
-	if _, _, err := LoadLayered(g, r, env(nil)); err == nil || !strings.Contains(err.Error(), r) {
+	if _, _, _, err := LoadLayered(g, root, env(nil)); err == nil || !strings.Contains(err.Error(), r) {
 		t.Errorf("bad repo file: %v", err)
 	}
 }

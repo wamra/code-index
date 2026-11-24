@@ -33,7 +33,7 @@ func cmdSearch(args []string, out, errw io.Writer) int {
 		return fail(errw, "search: %v", err)
 	}
 	defer st.Close()
-	cfg, _, err := loadConfig(root)
+	cfg, _, _, err := loadConfig(root)
 	if err != nil {
 		return fail(errw, "search: %v", err)
 	}

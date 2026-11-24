@@ -22,7 +22,8 @@ func cmdConfig(args []string, out, errw io.Writer) int {
 	path := configPath()
 	switch {
 	case len(pos) == 0:
-		c, src, err := config.LoadLayered(path, config.RepoPath(cwdRoot()), os.Getenv)
+		c, src, notes, err := config.LoadLayered(path, cwdRoot(), os.Getenv)
+		printNotes(errw, notes)
 		if err != nil {
 			return fail(errw, "config: %v", err)
 		}

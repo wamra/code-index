@@ -63,6 +63,19 @@ type Config struct {
 	Languages  map[string]Language      `json:"languages,omitempty"`
 	Extractors map[string]Extractor     `json:"extractors,omitempty"`
 	Index      Index                    `json:"index"`
+	// Repos holds per-repo settings in the central file, keyed by repo root
+	// path (a leading "~/" is the home directory). An entry has the shape of the
+	// file itself except that it cannot nest "repos"; it is trusted, so it may
+	// define commands. See LoadLayered.
+	Repos map[string]Config `json:"repos,omitempty"`
+	// TrustRepoConfig, in a repos entry, lets <repo>/.Wammy/config.json define
+	// commands. In a loaded (merged) Config it is the effective trust of the repo.
+	TrustRepoConfig bool `json:"trust_repo_config,omitempty"`
+
+	// gate maps "extractors.<name>" and "languages.<name>.command" to the note
+	// about a repo-file key LoadLayered dropped, so Validate can say why a name
+	// is undefined.
+	gate map[string]string
 }
 
 // Path returns the config file path: $CODE_INDEX_CONFIG, else
@@ -75,20 +88,21 @@ func Path(home string, getenv func(string) string) string {
 }
 
 // readFile decodes one config file. sections names the top-level sections the
-// file contains. A missing file is not an error (found is false).
-func readFile(path string) (c Config, sections map[string]bool, found bool, err error) {
+// file contains and entrySections the keys of each repos entry. A missing file
+// is not an error (found is false).
+func readFile(path string) (c Config, sections map[string]bool, entrySections map[string]map[string]bool, found bool, err error) {
 	b, err := os.ReadFile(path)
 	switch {
 	case err == nil:
 	case errors.Is(err, fs.ErrNotExist):
-		return Config{}, nil, false, nil
+		return Config{}, nil, nil, false, nil
 	default:
-		return Config{}, nil, false, fmt.Errorf("config %s: %w", path, err)
+		return Config{}, nil, nil, false, fmt.Errorf("config %s: %w", path, err)
 	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
-		return Config{}, nil, true, fmt.Errorf("config %s: %w", path, err)
+		return Config{}, nil, nil, true, fmt.Errorf("config %s: %w", path, err)
 	}
 	var raw map[string]json.RawMessage
 	_ = json.Unmarshal(b, &raw)
@@ -96,7 +110,16 @@ func readFile(path string) (c Config, sections map[string]bool, found bool, err 
 	for k := range raw {
 		sections[k] = true
 	}
-	return c, sections, true, nil
+	var repos map[string]map[string]json.RawMessage
+	_ = json.Unmarshal(raw["repos"], &repos)
+	entrySections = map[string]map[string]bool{}
+	for key, e := range repos {
+		entrySections[key] = map[string]bool{}
+		for k := range e {
+			entrySections[key][k] = true
+		}
+	}
+	return c, sections, entrySections, true, nil
 }
 
 // Load reads the file at path (a missing file means defaults) and applies the
@@ -106,7 +129,7 @@ func readFile(path string) (c Config, sections map[string]bool, found bool, err 
 // Environment, applied over the file: CODE_INDEX_EMBED_{PROVIDER,MODEL,BASE_URL}
 // and CODE_INDEX_SUMMARIZE_{PROVIDER,MODEL,BASE_URL}.
 func Load(path string, getenv func(string) string) (c Config, found bool, err error) {
-	c, _, found, err = readFile(path)
+	c, _, _, found, err = readFile(path)
 	if err != nil {
 		return Config{}, found, err
 	}
@@ -116,70 +139,11 @@ func Load(path string, getenv func(string) string) (c Config, found bool, err er
 
 // Sources says which file each section of a layered config came from:
 // keys "embed", "summarize", "index", "languages.<name>" and
-// "extractors.<name>"; the value is a file path, or "default" when no file set
-// it ("built-in" for a built-in extractor in the effective config).
+// "extractors.<name>"; the value is a file path (<file>#repos.<key> for an entry
+// of the central file's repos section), or "default" when no file set it
+// ("built-in" for a built-in extractor in the effective config). The key
+// "repos" is present when a repos entry matched the repo.
 type Sources map[string]string
-
-// RepoPath is the per-repo override file: <root>/.Wammy/config.json.
-func RepoPath(root string) string { return filepath.Join(root, ".Wammy", "config.json") }
-
-// LoadLayered reads the global file and the optional per-repo override and
-// merges them section by section: "languages" per language key, "extractors"
-// per extractor name (an entry replaces a built-in or earlier entry of the same
-// name as a whole), "embed",
-// "summarize" and "index" replaced as whole sections when the repo file has
-// them. Environment overrides apply last.
-func LoadLayered(globalPath, repoPath string, getenv func(string) string) (Config, Sources, error) {
-	src := Sources{"embed": "default", "summarize": "default", "index": "default"}
-	g, gsec, gfound, err := readFile(globalPath)
-	if err != nil {
-		return Config{}, nil, err
-	}
-	c := Config{Languages: map[string]Language{}, Extractors: map[string]Extractor{}}
-	if gfound {
-		for _, sec := range []string{"embed", "summarize", "index"} {
-			if gsec[sec] {
-				src[sec] = globalPath
-			}
-		}
-		c.Embed, c.Summarize, c.Index = g.Embed, g.Summarize, g.Index
-		for n, l := range g.Languages {
-			c.Languages[n] = l
-			src["languages."+n] = globalPath
-		}
-		for n, e := range g.Extractors {
-			c.Extractors[n] = e
-			src["extractors."+n] = globalPath
-		}
-	}
-	if repoPath != "" {
-		r, rsec, rfound, err := readFile(repoPath)
-		if err != nil {
-			return Config{}, nil, err
-		}
-		if rfound {
-			if rsec["embed"] {
-				c.Embed, src["embed"] = r.Embed, repoPath
-			}
-			if rsec["summarize"] {
-				c.Summarize, src["summarize"] = r.Summarize, repoPath
-			}
-			if rsec["index"] {
-				c.Index, src["index"] = r.Index, repoPath
-			}
-			for n, l := range r.Languages {
-				c.Languages[n] = l
-				src["languages."+n] = repoPath
-			}
-			for n, e := range r.Extractors {
-				c.Extractors[n] = e
-				src["extractors."+n] = repoPath
-			}
-		}
-	}
-	finish(&c, getenv)
-	return c, src, nil
-}
 
 func finish(c *Config, getenv func(string) string) {
 	applyEnv(c, getenv)
@@ -249,6 +213,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validateExtractors(); err != nil {
+		return err
+	}
+	if err := c.validateRepos(); err != nil {
 		return err
 	}
 	seen := map[string]string{}
@@ -378,8 +345,21 @@ func Effective(c Config, src Sources, getenv func(string) string) []byte {
 		EmbedKey     string `json:"_embed_api_key"`
 		SummarizeKey string `json:"_summarize_api_key"`
 		EmbedCap     string `json:"_embed_daily_cap"`
-	}{src, o, state(r.Embed.APIKeyEnv), state(r.Summarize.APIKeyEnv), capText(r.Embed.DailyCap)}, "", "  ")
+		RepoConfig   string `json:"_repo_config"`
+	}{src, o, state(r.Embed.APIKeyEnv), state(r.Summarize.APIKeyEnv), capText(r.Embed.DailyCap), repoTrust(r, src)}, "", "  ")
 	return append(b, '\n')
+}
+
+// repoTrust says how the repo's own .Wammy/config.json is treated.
+func repoTrust(c Config, src Sources) string {
+	e, ok := src["repos"]
+	switch {
+	case ok && c.TrustRepoConfig:
+		return "trusted by " + e + ": the repo file may define extractors, commands, embed and summarize"
+	case ok:
+		return "untrusted: " + e + " does not set trust_repo_config; the repo file may only set language extensions, extractor names and index"
+	}
+	return "untrusted: no repos entry for this repo in the central file; the repo file may only set language extensions, extractor names and index"
 }
 
 func capText(f func() (int, string)) string {
@@ -391,7 +371,7 @@ func capText(f func() (int, string)) string {
 }
 
 // InitComment is the "_comment" of the file written by `config init`.
-const InitComment = "code-index configuration. embed: provider \"ollama\", \"openai\" (any OpenAI-compatible server) or \"bedrock\"; set enabled to true to build and use embeddings (without them everything works through full-text search). api_key_env is the NAME of an environment variable holding the API key, never the key itself. summarize is parsed but not used yet. languages: one entry per language, with its extensions (they must include the dot) and the extractor(s) that give its symbols and call edges, in run order. extractors: the definitions the languages name; type \"lsp\" is a language server (argv is the command line), type \"exec\" is a subprocess that prints JSON-lines records ({root}, {listFile} and {embedded:NAME} are replaced in argv); powershell-ast is built in. The older shape (a language with command, args, env) is still read. index.ignore: path or glob patterns skipped in addition to .gitignore; index.max_file_size in bytes. Environment overrides: CODE_INDEX_CONFIG, CODE_INDEX_DB, CODE_INDEX_{EMBED,SUMMARIZE}_{PROVIDER,MODEL,BASE_URL}."
+const InitComment = "code-index configuration. embed: provider \"ollama\", \"openai\" (any OpenAI-compatible server) or \"bedrock\"; set enabled to true to build and use embeddings (without them everything works through full-text search). api_key_env is the NAME of an environment variable holding the API key, never the key itself. summarize is parsed but not used yet. languages: one entry per language, with its extensions (they must include the dot) and the extractor(s) that give its symbols and call edges, in run order. extractors: the definitions the languages name; type \"lsp\" is a language server (argv is the command line), type \"exec\" is a subprocess that prints JSON-lines records ({root}, {listFile} and {embedded:NAME} are replaced in argv); powershell-ast is built in. The older shape (a language with command, args, env) is still read. index.ignore: path or glob patterns skipped in addition to .gitignore; index.max_file_size in bytes. repos: settings for one repo, keyed by its root path, same shape as this file (trust_repo_config true also lets that repo's own .Wammy/config.json define extractors and commands; otherwise it can only set language extensions, extractor names and index). Environment overrides: CODE_INDEX_CONFIG, CODE_INDEX_DB, CODE_INDEX_{EMBED,SUMMARIZE}_{PROVIDER,MODEL,BASE_URL}."
 
 // KnownServers are the language server commands `config init` looks for on PATH.
 var KnownServers = []struct {

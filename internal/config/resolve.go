@@ -279,7 +279,7 @@ func validateExtractor(name string, e Extractor) error {
 func (c Config) validateLanguageExtractors(lang string, l Language) error {
 	names := l.Extractor.Names()
 	if len(names) == 0 {
-		return fmt.Errorf("languages.%s.extractor is required (or the legacy command)", lang)
+		return fmt.Errorf("languages.%s.extractor is required (or the legacy command)%s", lang, c.gateNote("languages."+lang+".command"))
 	}
 	listed := map[string]bool{}
 	for _, n := range names {
@@ -302,7 +302,7 @@ func (c Config) validateLanguageExtractors(lang string, l Language) error {
 	for _, n := range names {
 		e, builtin, ok := c.lookupExtractor(n)
 		if !ok {
-			return fmt.Errorf("languages.%s.extractor: unknown extractor %q (known: %s)", lang, n, strings.Join(c.extractorNames(), ", "))
+			return fmt.Errorf("languages.%s.extractor: unknown extractor %q (known: %s)%s", lang, n, strings.Join(c.extractorNames(), ", "), c.gateNote("extractors."+n))
 		}
 		if builtin {
 			continue
@@ -314,6 +314,14 @@ func (c Config) validateLanguageExtractors(lang string, l Language) error {
 		}
 	}
 	return nil
+}
+
+// gateNote is "; <note>" for a key the repo-file gate dropped, else "".
+func (c Config) gateNote(key string) string {
+	if n := c.gate[key]; n != "" {
+		return "; " + n
+	}
+	return ""
 }
 
 // sameCommand reports whether l.Command and l.Args are what Resolved copied

@@ -370,25 +370,56 @@ func TestPerRepoDatabaseInGitRepo(t *testing.T) {
 	}
 }
 
+// trustRepo adds a repos entry with trust_repo_config to the test's central file.
+func trustRepo(t *testing.T, e env) {
+	t.Helper()
+	var cfg map[string]any
+	b, _ := os.ReadFile(e.cfgPath)
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg["repos"] = map[string]any{e.root: map[string]any{"trust_repo_config": true}}
+	b, _ = json.Marshal(cfg)
+	os.WriteFile(e.cfgPath, b, 0o644)
+}
+
 func TestRepoConfigOverride(t *testing.T) {
 	e := setup(t, "")
 	os.MkdirAll(filepath.Join(e.root, ".Wammy"), 0o700)
 	repoCfg := filepath.Join(e.root, ".Wammy", "config.json")
 	os.WriteFile(repoCfg, []byte(`{"embed":{"provider":"ollama","model":"repo-model","enabled":false},"index":{"max_file_size":5}}`), 0o644)
-	out := mustOK(t, "config")
-	var c struct {
+	type effective struct {
 		Sources map[string]string `json:"_sources"`
 		Embed   struct{ Model string }
 		Index   struct {
 			MaxFileSize int `json:"max_file_size"`
 		}
-		Languages map[string]any
+		Languages  map[string]any
+		RepoConfig string `json:"_repo_config"`
 	}
-	if err := json.Unmarshal([]byte(out), &c); err != nil {
-		t.Fatal(err)
+	show := func() (effective, string) {
+		code, out, errw := cli(t, "config")
+		if code != 0 {
+			t.Fatalf("config: %d %s", code, errw)
+		}
+		var c effective
+		if err := json.Unmarshal([]byte(out), &c); err != nil {
+			t.Fatal(err)
+		}
+		return c, errw
 	}
-	if c.Sources["embed"] != repoCfg || c.Sources["index"] != repoCfg || c.Sources["summarize"] != "default" || c.Sources["languages.powershell"] != e.cfgPath {
-		t.Errorf("sources = %v", c.Sources)
+	// untrusted: embed is dropped with a note, index still applies
+	c, errw := show()
+	if c.Embed.Model == "repo-model" || c.Sources["embed"] != "default" || c.Sources["index"] != repoCfg || c.Index.MaxFileSize != 5 ||
+		!strings.HasPrefix(c.RepoConfig, "untrusted") || !strings.Contains(errw, "note: "+repoCfg+": ignored embed") || !strings.Contains(errw, "trust_repo_config") {
+		t.Errorf("untrusted: %+v\nstderr: %s", c, errw)
+	}
+	// trusted by the central file: the whole file applies
+	trustRepo(t, e)
+	c, errw = show()
+	if c.Sources["embed"] != repoCfg || c.Sources["index"] != repoCfg || c.Sources["summarize"] != "default" || c.Sources["languages.powershell"] != e.cfgPath ||
+		c.Sources["repos"] != e.cfgPath+"#repos."+e.root || !strings.HasPrefix(c.RepoConfig, "trusted by") || errw != "" {
+		t.Errorf("sources = %v, repo_config %q, stderr %q", c.Sources, c.RepoConfig, errw)
 	}
 	if c.Embed.Model != "repo-model" || c.Index.MaxFileSize != 5 || c.Languages["powershell"] == nil {
 		t.Errorf("merged config: %+v", c)
