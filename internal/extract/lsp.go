@@ -53,9 +53,9 @@ func (e *lspExtractor) Start(ctx context.Context, env Env) (Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("extractor %q: %w", e.name, err)
 	}
-	command, err := e.command(argv[0])
+	command, err := ResolveCommand(e.ec, os.Getenv, exec.LookPath)
 	if err != nil && env.OpenLSP == nil {
-		return nil, fmt.Errorf("%w: %v", ErrExtractorUnavailable, err)
+		return nil, err // wraps ErrExtractorUnavailable
 	}
 	if command == "" { // injected opener: let it decide
 		command = argv[0]
@@ -89,37 +89,20 @@ func (e *lspExtractor) Start(ctx context.Context, env Env) (Session, error) {
 		return nil, err
 	}
 	caps := cl.Capabilities()
+	delays := EmptyRetryDelays
+	if env.EmptyRetryDelays != nil {
+		delays = env.EmptyRetryDelays
+	}
 	return &lspSession{
 		cl: cl, ex: e, env: env, caps: caps,
-		delays: append([]time.Duration(nil), EmptyRetryDelays...),
+		delays: append([]time.Duration(nil), delays...),
 	}, nil
-}
-
-// command resolves the executable: the value of command_env when that
-// variable is set (and nothing else), else argv[0] and then each of
-// command_fallbacks. The first one found on PATH wins.
-func (e *lspExtractor) command(argv0 string) (string, error) {
-	candidates := append([]string{argv0}, e.ec.CommandFallbacks...)
-	if v := os.Getenv(e.ec.CommandEnv); e.ec.CommandEnv != "" && v != "" {
-		candidates = []string{v}
-	}
-	var first error
-	for _, c := range candidates {
-		p, err := lsp.ResolveCommand(c)
-		if err == nil {
-			return p, nil
-		}
-		if first == nil {
-			first = err
-		}
-	}
-	return "", first
 }
 
 // EmptyRetryDelays are the waits before an lsp session re-asks for the symbols
 // of a non-empty file after an empty answer (bash-language-server answers []
 // until it has analysed the document). A session copies the value at Start;
-// tests and indexer.Options.EmptyRetryDelays assign it before Start.
+// tests assign it before Start; Env.EmptyRetryDelays overrides it per run.
 var EmptyRetryDelays = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second}
 
 // lspSession is a running language server for one language and one run.

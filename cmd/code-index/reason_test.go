@@ -15,8 +15,8 @@ func TestEdgeReasonCandidateAndInvokesOutput(t *testing.T) {
 	e := setupOpts(t, "", "refs")
 	graphTree(t, e)
 	mustOK(t, "index", e.root, "--quiet")
-	if got := mustOK(t, "callers", "Gamma"); got != "cycle.ps1:5  Beta  [lsp exact]\ncycle.ps1:11  Delta  [lsp exact]\n" {
-		t.Fatalf("without a reason the output is unchanged:\n%s", got)
+	if got := mustOK(t, "callers", "Gamma"); got != "cycle.ps1:5  Beta  [lsp candidate references]\ncycle.ps1:11  Delta  [lsp candidate references]\n" {
+		t.Fatalf("a references-only server gives candidate edges with the reason references:\n%s", got)
 	}
 
 	st, err := store.Open(e.dbPath)
@@ -25,6 +25,7 @@ func TestEdgeReasonCandidateAndInvokesOutput(t *testing.T) {
 	}
 	for _, q := range []string{
 		`UPDATE edges SET confidence='candidate', reason='call-hierarchy' WHERE kind='calls' AND line=4`, // Beta -> Gamma at cycle.ps1:5
+		`UPDATE edges SET reason=NULL WHERE kind='calls' AND line=10`,                                    // Delta -> Gamma at cycle.ps1:11: an edge without a reason prints no reason
 		`INSERT INTO edges(src_symbol_id, dst_symbol_id, dst_name, kind, file_id, line, col, source, confidence, reason)
 			VALUES (NULL, NULL, 'd1.ps1', 'invokes', (SELECT id FROM files WHERE path='cycle.ps1'), 20, 0, 'ast', 'exact', 'direct')`,
 	} {
@@ -34,7 +35,7 @@ func TestEdgeReasonCandidateAndInvokesOutput(t *testing.T) {
 	}
 	st.Close()
 
-	if got := mustOK(t, "callers", "Gamma"); got != "cycle.ps1:5  Beta  [lsp candidate call-hierarchy]\ncycle.ps1:11  Delta  [lsp exact]\n" {
+	if got := mustOK(t, "callers", "Gamma"); got != "cycle.ps1:5  Beta  [lsp candidate call-hierarchy]\ncycle.ps1:11  Delta  [lsp candidate]\n" {
 		t.Errorf("callers:\n%s", got)
 	}
 	if got := mustOK(t, "impact", "Gamma", "--depth", "1"); !strings.Contains(got, "d1  cycle.ps1:5  Beta -> Gamma  [lsp candidate call-hierarchy]\n") {

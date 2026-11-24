@@ -142,7 +142,9 @@ func (s *execSession) serve(ctx context.Context, files []string, emit Emit) erro
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	key := strings.Join(files, "\n")
+	sorted := append([]string(nil), files...)
+	sort.Strings(sorted)
+	key := strings.Join(sorted, "\n") // the same set in another order is the same run
 	recs, ok := s.cache[key]
 	if !ok {
 		var err error

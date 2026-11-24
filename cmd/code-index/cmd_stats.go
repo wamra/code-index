@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wamra/code-index/internal/config"
 	"github.com/wamra/code-index/internal/embed"
+	"github.com/wamra/code-index/internal/extract"
 	"github.com/wamra/code-index/internal/provider"
 	"github.com/wamra/code-index/internal/search"
 	"github.com/wamra/code-index/internal/store"
@@ -121,12 +123,8 @@ func cmdDoctor(args []string, out, errw io.Writer) int {
 	if *noIndex {
 		if cerr == nil {
 			for _, name := range cfg.LanguageNames() {
-				l := cfg.Languages[name]
-				if p, err := exec.LookPath(l.Command); err != nil {
-					add("WARN", "language "+name, "command %q not found on PATH", l.Command)
-				} else {
-					add("ok", "language "+name, "%s", p)
-				}
+				level, detail := languageCheck(cfg, name)
+				add(level, "language "+name, "%s", detail)
 			}
 			if !cfg.EmbedEnabled() {
 				add("ok", "embedder", "not configured: search uses names and full text only")
@@ -199,12 +197,8 @@ func cmdDoctor(args []string, out, errw io.Writer) int {
 			rows.Close()
 		}
 		for _, name := range cfg.LanguageNames() {
-			l := cfg.Languages[name]
-			if p, err := exec.LookPath(l.Command); err != nil {
-				add("WARN", "language "+name, "command %q not found on PATH", l.Command)
-			} else {
-				add("ok", "language "+name, "%s (%d file(s) indexed)", p, used[name])
-			}
+			level, detail := languageCheck(cfg, name)
+			add(level, "language "+name, "%s (%d file(s) indexed)", detail, used[name])
 		}
 	}
 
@@ -303,4 +297,31 @@ func joinKeys(m map[string]bool) string {
 		return "none (defaults)"
 	}
 	return strings.Join(sortedKeys(m), ", ")
+}
+
+// languageCheck looks up the command of every extractor of the language
+// (command_env, argv[0], command_fallbacks, as the indexer resolves them). It
+// returns "ok" with "name (type): path" for each, or "WARN" naming the
+// extractors whose command is missing.
+func languageCheck(cfg config.Config, lang string) (level, detail string) {
+	var found, missing []string
+	for _, ne := range cfg.ExtractorsFor(lang) {
+		p, err := extract.ResolveCommand(ne.Extractor, os.Getenv, exec.LookPath)
+		if err != nil {
+			missing = append(missing, fmt.Sprintf("%s (%s): %v", ne.Name, ne.Type, err))
+			continue
+		}
+		found = append(found, fmt.Sprintf("%s (%s): %s", ne.Name, ne.Type, p))
+	}
+	switch {
+	case len(found)+len(missing) == 0:
+		return "WARN", "no extractor configured"
+	case len(missing) > 0:
+		d := "missing: " + strings.Join(missing, "; ")
+		if len(found) > 0 {
+			d += "; found: " + strings.Join(found, "; ")
+		}
+		return "WARN", d
+	}
+	return "ok", strings.Join(found, "; ")
 }

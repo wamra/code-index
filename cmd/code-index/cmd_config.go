@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/wamra/code-index/internal/config"
 )
@@ -37,16 +38,21 @@ func cmdConfig(args []string, out, errw io.Writer) int {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return fail(errw, "config init: %v", err)
 		}
-		langs := config.Discover(homeDir(), nil)
-		if err := os.WriteFile(path, config.Init(langs), 0o644); err != nil {
+		langs, exs := config.Discover(homeDir(), nil)
+		if err := os.WriteFile(path, config.Init(langs, exs), 0o644); err != nil {
 			return fail(errw, "config init: %v", err)
 		}
 		fmt.Fprintf(out, "wrote %s\n", path)
 		if len(langs) == 0 {
 			fmt.Fprintln(out, "no known language server found on PATH; add entries under \"languages\" by hand")
 		}
+		resolved := config.Config{Languages: langs, Extractors: exs}
 		for _, n := range sortedKeys(langs) {
-			fmt.Fprintf(out, "  language %s: %s\n", n, langs[n].Command)
+			var parts []string
+			for _, ne := range resolved.ExtractorsFor(n) {
+				parts = append(parts, fmt.Sprintf("%s (%s: %s)", ne.Name, ne.Type, ne.Argv[0]))
+			}
+			fmt.Fprintf(out, "  language %s: %s\n", n, strings.Join(parts, ", "))
 		}
 		return 0
 	}

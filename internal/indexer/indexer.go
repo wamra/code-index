@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/wamra/code-index/internal/config"
@@ -30,8 +29,8 @@ type Options struct {
 	Log   io.Writer
 	// Open starts a language server; nil means lsp.Start.
 	Open func(lsp.Spec) (*lsp.Client, error)
-	// EmptyRetryDelays overrides the waits before re-asking for symbols after
-	// an empty answer (nil = DefaultEmptyRetryDelays).
+	// EmptyRetryDelays overrides the waits before an lsp extractor re-asks for
+	// symbols after an empty answer (nil = extract.EmptyRetryDelays).
 	EmptyRetryDelays []time.Duration
 	// NoEdges skips call-graph edges (LSP references and AST extractors).
 	NoEdges bool
@@ -146,12 +145,7 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 	}
 
 	// Decide per file: unchanged, or needs indexing.
-	type work struct {
-		c    candidate
-		data []byte
-		sha  string
-	}
-	byLang := map[string][]work{}
+	byLang := map[string][]workItem{}
 	seen := make(map[string]bool, len(cands))
 	for _, c := range cands {
 		seen[c.rel] = true
@@ -179,7 +173,7 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 			res.Unchanged++
 			continue
 		}
-		byLang[c.lang] = append(byLang[c.lang], work{c, data, sha})
+		byLang[c.lang] = append(byLang[c.lang], workItem{c, data, sha})
 	}
 
 	// Drop files that vanished, became ignored, or lost their language.
@@ -244,48 +238,31 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 	for _, lang := range langs {
 		items := byLang[lang]
 		lc := cfg.Languages[lang]
-		cl, err := startServer(ctx, o, lc, root)
-		if err != nil {
-			if len(items) > 0 {
-				res.LangErrors[lang] = err.Error()
-				res.Failed += len(items)
-				o.logf("%s: %d file(s) not indexed: %v", lang, len(items), err)
-				edgesNotDone(lang)
-				continue
-			}
-			// nothing to re-index: still build the edges the AST extractor can give
-			res.Notes = append(res.Notes, fmt.Sprintf("%s: no language server (%v); LSP edges skipped", lang, err))
-			cl = nil
-		} else {
-			o.logf("%s: %s %s ready, indexing %d file(s)", lang, orDash(cl.ServerName), cl.ServerVersion, len(items))
-		}
-		rs := &retryState{delays: o.EmptyRetryDelays}
-		if rs.delays == nil {
-			rs.delays = DefaultEmptyRetryDelays
-		}
-		for _, w := range items {
+		live, notes, serr := startSessions(ctx, o, root, lang, cfg.ExtractorsFor(lang), len(items) > 0, edgeLangs[lang])
+		res.Notes = append(res.Notes, notes...)
+		if serr != nil {
+			closeSessions(live)
 			if ctx.Err() != nil {
 				break
 			}
-			fs, err := indexFile(ctx, st, cl, rs, lc, w.c, w.data, w.sha, existing[w.c.rel].id, hasVec)
-			if err != nil {
-				res.Failed++
-				res.FileErrors = append(res.FileErrors, w.c.rel+": "+err.Error())
-				o.logf("  failed %s: %v", w.c.rel, err)
-				if errors.Is(err, lsp.ErrClosed) { // server died: stop this language
-					res.LangErrors[lang] = err.Error()
-					break
-				}
-				continue
+			if len(items) > 0 {
+				res.LangErrors[lang] = serr.Error()
+				res.Failed += len(items)
+				o.logf("%s: %d file(s) not indexed: %v", lang, len(items), serr)
+			} else {
+				res.Notes = append(res.Notes, fmt.Sprintf("%s: %v; edges not computed", lang, serr))
 			}
-			res.Indexed++
-			res.Symbols += fs.symbols
-			res.Chunks += fs.chunks
-			o.logf("  %s: %d symbol(s)", w.c.rel, fs.symbols)
+			edgesNotDone(lang)
+			continue
+		}
+		if len(items) > 0 {
+			sym := symbolSession(live)
+			o.logf("%s: %s ready, indexing %d file(s)", lang, sym.ne.Name, len(items))
+			indexItems(ctx, st, o, lang, sym, items, existing, hasVec, &res)
 		}
 		complete := ctx.Err() == nil && res.LangErrors[lang] == ""
 		if edgeLangs[lang] && complete {
-			es, err := computeEdges(ctx, st, o, root, lang, cfg.ExtractorsFor(lang), lc, cl)
+			es, err := computeEdges(ctx, st, o, root, lang, live, lc.Extensions)
 			res.Notes = append(res.Notes, es.Notes...)
 			if err != nil {
 				res.Notes = append(res.Notes, fmt.Sprintf("%s: edges not computed: %v", lang, err))
@@ -304,9 +281,7 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 			// --no-edges re-indexed a stale language: the next run rebuilds its edges only.
 			_ = st.SetMeta(ctx, edgesMetaKey(lang), "")
 		}
-		if cl != nil {
-			cl.Close()
-		}
+		closeSessions(live)
 	}
 	if err := ctx.Err(); err != nil {
 		res.Elapsed = time.Since(start)
@@ -327,41 +302,6 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 }
 
 func edgesMetaKey(lang string) string { return "edges_lang:" + lang }
-
-func orDash(s string) string {
-	if s == "" {
-		return "server"
-	}
-	return s
-}
-
-func startServer(ctx context.Context, o Options, lc config.Language, root string) (*lsp.Client, error) {
-	spec := lsp.Spec{
-		Command: lc.Command, Args: lc.Args, Dir: root,
-		StartupTimeout: time.Duration(lc.StartupTimeoutS) * time.Second,
-		RequestTimeout: time.Duration(lc.RequestTimeoutS) * time.Second,
-	}
-	for _, k := range sortedEnv(lc.Env) {
-		spec.Env = append(spec.Env, k+"="+lc.Env[k])
-	}
-	open := o.Open
-	if open == nil {
-		open = lsp.Start
-	}
-	cl, err := open(spec)
-	if err != nil {
-		return nil, err
-	}
-	if err := cl.Initialize(ctx, root); err != nil {
-		cl.Close()
-		return nil, err
-	}
-	if !cl.Capabilities().DocumentSymbol {
-		cl.Close()
-		return nil, fmt.Errorf("%s does not advertise documentSymbol", lc.Command)
-	}
-	return cl, nil
-}
 
 func loadFiles(ctx context.Context, db *sql.DB) (map[string]fileRow, error) {
 	rows, err := db.QueryContext(ctx, `SELECT id, path, sha256, COALESCE(mtime,0), COALESCE(size,0), status, lang FROM files`)
@@ -397,103 +337,6 @@ func dropFile(ctx context.Context, db *sql.DB, id int64, hasVec bool) error {
 }
 
 type fileStats struct{ symbols, chunks int }
-
-// DefaultEmptyRetryDelays are the waits before re-asking for symbols when a server
-// answered with an empty list for a non-empty file. bash-language-server
-// analyzes a document asynchronously after didOpen and answers [] (no error)
-// until it is done, so an empty answer is not trusted at once.
-var DefaultEmptyRetryDelays = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second}
-
-// retryState adapts the empty-answer retry to the server: once a retry has
-// produced symbols the server is known to be asynchronous and retries stay on;
-// after three retries that found nothing they stop (the files really are empty
-// of symbols), so a server that answers promptly is not slowed down.
-type retryState struct {
-	helped, wasted int
-	delays         []time.Duration
-}
-
-func (r *retryState) allow() bool { return r.helped > 0 || r.wasted < 3 }
-
-func documentSymbols(ctx context.Context, cl *lsp.Client, uri, text string, rs *retryState) ([]lsp.Symbol, error) {
-	syms, err := cl.DocumentSymbols(ctx, uri)
-	if err != nil || len(syms) > 0 || strings.TrimSpace(text) == "" || !rs.allow() {
-		return syms, err
-	}
-	for _, d := range rs.delays {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(d):
-		}
-		syms, err = cl.DocumentSymbols(ctx, uri)
-		if err != nil || len(syms) > 0 {
-			break
-		}
-	}
-	if len(syms) > 0 {
-		rs.helped++
-	} else if err == nil {
-		rs.wasted++
-	}
-	return syms, err
-}
-
-// indexFile extracts one file through cl and replaces its rows. When the
-// server fails on the file, the file is recorded with status 'failed' (and no
-// symbols) so the next run retries it, and the error is returned.
-func indexFile(ctx context.Context, st *store.Store, cl *lsp.Client, rs *retryState, lc config.Language, c candidate, data []byte, sha string, oldID int64, hasVec bool) (fileStats, error) {
-	text := strings.ToValidUTF8(string(data), "\ufffd")
-	text = strings.TrimPrefix(text, "\ufeff") // editors send the text without a BOM
-	lines := splitLines(text)
-	uri := lsp.PathToURI(c.abs)
-
-	if err := cl.DidOpen(uri, lc.LanguageID, 1, text); err != nil {
-		return fileStats{}, err
-	}
-	defer cl.DidClose(uri)
-	raw, err := documentSymbols(ctx, cl, uri, text, rs)
-	if err != nil {
-		_ = recordFailure(ctx, st, c, sha, oldID, hasVec, err)
-		return fileStats{}, err
-	}
-	normalizeNames(raw, lines)
-	syms := flatten(raw)
-	for i := range syms {
-		s := &syms[i]
-		locateName(s, lines)
-		s.BodySHA = bodySHA(lines, s.Range.Start.Line, s.Range.End.Line)
-		s.Signature = s.Detail
-		if hoverKinds[s.Kind] && cl.Capabilities().Hover {
-			h, herr := cl.Hover(ctx, uri, s.SelectionRange.Start)
-			if herr != nil {
-				if errors.Is(herr, lsp.ErrClosed) {
-					return fileStats{}, herr
-				}
-				continue // hover is best effort
-			}
-			if sig, doc := lsp.ParseHover(h); sig != "" || doc != "" {
-				if sig != "" {
-					s.Signature = sig
-				}
-				s.Doc = doc
-			}
-		}
-		if hoverKinds[s.Kind] {
-			// Fallbacks from the source when hover had nothing at the definition.
-			if s.Doc == "" {
-				s.Doc = leadingComment(lines, s.Range.Start.Line)
-			}
-			if s.Doc == "" {
-				s.Doc = helpComment(lines, s.Range.Start.Line, s.Range.End.Line)
-			}
-			if s.Signature == "" {
-				s.Signature = declarationLine(lines, s.Range.Start.Line)
-			}
-		}
-	}
-	return writeFile(ctx, st, c, sha, oldID, hasVec, syms)
-}
 
 func recordFailure(ctx context.Context, st *store.Store, c candidate, sha string, oldID int64, hasVec bool, cause error) error {
 	tx, err := st.DB().BeginTx(ctx, nil)
@@ -601,13 +444,4 @@ func addChunk(ctx context.Context, tx *sql.Tx, targetKind string, targetID, file
 	id, _ := res.LastInsertId()
 	_, err = tx.ExecContext(ctx, `INSERT INTO chunk_fts(rowid, text) VALUES (?,?)`, id, text)
 	return err
-}
-
-func sortedEnv(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

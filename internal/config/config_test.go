@@ -120,7 +120,7 @@ func TestLanguageValidation(t *testing.T) {
 
 func TestInitRoundTrips(t *testing.T) {
 	langs := map[string]Language{"bash": KnownServers[0].Lang}
-	p := write(t, string(Init(langs)))
+	p := write(t, string(Init(langs, nil)))
 	c, found, err := Load(p, env(nil))
 	if err != nil || !found {
 		t.Fatalf("init output does not load: %v", err)
@@ -151,7 +151,7 @@ func TestDiscover(t *testing.T) {
 		}
 		return "", errors.New("not found")
 	}
-	got := Discover(home, look)
+	got, _ := Discover(home, look)
 	if len(got) != 2 || got["bash"].Command != "bash-language-server" {
 		t.Fatalf("discovered %v", got)
 	}
@@ -164,7 +164,7 @@ func TestDiscover(t *testing.T) {
 	}
 	// config init writes the new shape: the language server is an lsp extractor and
 	// powershell-ast is listed (and defined) explicitly
-	b := Init(map[string]Language{"powershell": ps})
+	b := Init(map[string]Language{"powershell": ps}, nil)
 	ic, _, err := Load(write(t, string(b)), env(nil))
 	if err != nil {
 		t.Fatalf("init output does not load: %v\n%s", err, b)
@@ -176,7 +176,7 @@ func TestDiscover(t *testing.T) {
 		t.Errorf("config init must write the new shape:\n%s", b)
 	}
 	// no pwsh script installed -> no powershell entry
-	if _, ok := Discover(t.TempDir(), look)["powershell"]; ok {
+	if ls, _ := Discover(t.TempDir(), look); func() bool { _, ok := ls["powershell"]; return ok }() {
 		t.Error("powershell must need the start script")
 	}
 }
@@ -241,5 +241,56 @@ func TestUnknownExtractorIsRejected(t *testing.T) {
 	c.Languages["x"] = Language{Command: "c", Extensions: []string{".x"}, Extractor: "powershell-ast"}
 	if err := c.Resolved().Validate(); err != nil {
 		t.Errorf("Validate = %v", err)
+	}
+}
+
+func TestDiscoverWammybashBash(t *testing.T) {
+	onPath := func(names ...string) func(string) (string, error) {
+		return func(n string) (string, error) {
+			for _, x := range names {
+				if x == n {
+					return "/bin/" + n, nil
+				}
+			}
+			return "", errors.New("not found")
+		}
+	}
+	// wammybash alone, and next to bash-language-server: the bash language uses wammybash only
+	for _, look := range []func(string) (string, error){onPath("wammybash"), onPath("wammybash", "bash-language-server")} {
+		langs, exs := Discover(t.TempDir(), look)
+		b, ok := langs["bash"]
+		if !ok || b.Extractor.Names()[0] != "wammybash" || len(b.Extractor.Names()) != 1 || b.Command != "" {
+			t.Fatalf("bash entry: %+v", b)
+		}
+		if strings.Join(b.Extensions, ",") != ".sh,.bash" {
+			t.Errorf("extensions must leave .zsh out: %v", b.Extensions)
+		}
+		w := exs["wammybash"]
+		if w.Type != ExtractorExec || strings.Join(w.Argv, " ") != "wammybash extract --root {root} --list-file {listFile}" ||
+			strings.Join(w.VersionArgv, " ") != "wammybash version" || w.Symbols == nil || !*w.Symbols {
+			t.Errorf("wammybash extractor: %+v", w)
+		}
+		// the written file loads, validates and resolves to the exec extractor
+		raw := Init(langs, exs)
+		c, _, err := Load(write(t, string(raw)), env(nil))
+		if err != nil {
+			t.Fatalf("init output does not load: %v\n%s", err, raw)
+		}
+		if err := c.Resolved().Validate(); err != nil {
+			t.Fatalf("init output does not validate: %v\n%s", err, raw)
+		}
+		ne := c.ExtractorsFor("bash")
+		if len(ne) != 1 || ne[0].Name != "wammybash" || ne[0].Type != ExtractorExec || ne[0].Symbols == nil || !*ne[0].Symbols {
+			t.Errorf("ExtractorsFor(bash) = %+v", ne)
+		}
+	}
+	// bash-language-server alone stays the lsp entry, and no extractor is defined
+	langs, exs := Discover(t.TempDir(), onPath("bash-language-server"))
+	if langs["bash"].Command != "bash-language-server" || len(exs) != 0 {
+		t.Errorf("without wammybash: %+v %v", langs["bash"], exs)
+	}
+	// neither: no bash
+	if langs, _ := Discover(t.TempDir(), onPath()); len(langs) != 0 {
+		t.Errorf("nothing on PATH: %v", langs)
 	}
 }

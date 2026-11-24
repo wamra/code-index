@@ -36,31 +36,31 @@ func TestCallGraphCommands(t *testing.T) {
 		t.Fatalf("index summary: %s", out)
 	}
 
-	if got := mustOK(t, "callers", "Gamma"); got != "cycle.ps1:5  Beta  [lsp exact]\ncycle.ps1:11  Delta  [lsp exact]\n" {
+	if got := mustOK(t, "callers", "Gamma"); got != "cycle.ps1:5  Beta  [lsp candidate references]\ncycle.ps1:11  Delta  [lsp candidate references]\n" {
 		t.Errorf("callers Gamma:\n%s", got)
 	}
-	if got := mustOK(t, "callers", "Alpha"); got != "cycle.ps1:8  Gamma  [lsp exact]\ncycle.ps1:15  cycle.ps1 (top level)  [lsp exact]\n" {
+	if got := mustOK(t, "callers", "Alpha"); got != "cycle.ps1:8  Gamma  [lsp candidate references]\ncycle.ps1:15  cycle.ps1 (top level)  [lsp candidate references]\n" {
 		t.Errorf("callers Alpha:\n%s", got)
 	}
-	if got := mustOK(t, "callees", "Beta"); got != "cycle.ps1:5  Gamma  [lsp exact]\n" {
+	if got := mustOK(t, "callees", "Beta"); got != "cycle.ps1:5  Gamma  [lsp candidate references]\n" {
 		t.Errorf("callees Beta:\n%s", got)
 	}
 	// a file names its top-level calls
-	if got := mustOK(t, "callees", "cycle.ps1"); got != "cycle.ps1:15  Alpha  [lsp exact]\n" {
+	if got := mustOK(t, "callees", "cycle.ps1"); got != "cycle.ps1:15  Alpha  [lsp candidate references]\n" {
 		t.Errorf("callees cycle.ps1:\n%s", got)
 	}
 	// path:line resolves like show
-	if got := mustOK(t, "callees", "cycle.ps1:5"); got != "cycle.ps1:5  Gamma  [lsp exact]\n" {
+	if got := mustOK(t, "callees", "cycle.ps1:5"); got != "cycle.ps1:5  Gamma  [lsp candidate references]\n" {
 		t.Errorf("callees cycle.ps1:5:\n%s", got)
 	}
 
 	// impact is transitive, depth-limited and cycle-safe
 	got := mustOK(t, "impact", "Gamma")
-	want := "d1  cycle.ps1:5  Beta -> Gamma  [lsp exact]\n" +
-		"d1  cycle.ps1:11  Delta -> Gamma  [lsp exact]\n" +
-		"d2  cycle.ps1:2  Alpha -> Beta  [lsp exact]\n" +
-		"d3  cycle.ps1:8  Gamma -> Alpha  [lsp exact]\n" +
-		"d3  cycle.ps1:15  cycle.ps1 (top level) -> Alpha  [lsp exact]\n"
+	want := "d1  cycle.ps1:5  Beta -> Gamma  [lsp candidate references]\n" +
+		"d1  cycle.ps1:11  Delta -> Gamma  [lsp candidate references]\n" +
+		"d2  cycle.ps1:2  Alpha -> Beta  [lsp candidate references]\n" +
+		"d3  cycle.ps1:8  Gamma -> Alpha  [lsp candidate references]\n" +
+		"d3  cycle.ps1:15  cycle.ps1 (top level) -> Alpha  [lsp candidate references]\n"
 	if got != want {
 		t.Errorf("impact Gamma (default depth 3):\n%s\nwant:\n%s", got, want)
 	}
@@ -72,7 +72,7 @@ func TestCallGraphCommands(t *testing.T) {
 	}
 
 	// shortest path
-	if got := mustOK(t, "path", "Alpha", "Gamma"); got != "cycle.ps1:2  Alpha -> Beta  [lsp exact]\ncycle.ps1:5  Beta -> Gamma  [lsp exact]\n" {
+	if got := mustOK(t, "path", "Alpha", "Gamma"); got != "cycle.ps1:2  Alpha -> Beta  [lsp candidate references]\ncycle.ps1:5  Beta -> Gamma  [lsp candidate references]\n" {
 		t.Errorf("path Alpha Gamma:\n%s", got)
 	}
 	if code, _, errw := cli(t, "path", "Lone", "Gamma"); code != 1 || !strings.Contains(errw, "no call path from Lone to Gamma") {
@@ -109,7 +109,7 @@ func TestCallGraphCommands(t *testing.T) {
 	if err := json.Unmarshal([]byte(mustOK(t, "callers", "Gamma", "--json")), &cj); err != nil {
 		t.Fatal(err)
 	}
-	if cj.Symbol.Qualified != "Gamma" || len(cj.Edges) != 2 || cj.Edges[0].From != "Beta" || cj.Edges[0].Line != 5 || cj.Edges[0].Source != "lsp" || cj.Edges[0].Confidence != "exact" {
+	if cj.Symbol.Qualified != "Gamma" || len(cj.Edges) != 2 || cj.Edges[0].From != "Beta" || cj.Edges[0].Line != 5 || cj.Edges[0].Source != "lsp" || cj.Edges[0].Confidence != "candidate" {
 		t.Errorf("callers json = %+v", cj)
 	}
 	cj.Edges = nil
@@ -134,7 +134,7 @@ func TestCallGraphCommands(t *testing.T) {
 
 	// stats counts edges by kind, source and confidence
 	out = mustOK(t, "stats")
-	for _, w := range []string{"edges:       5", "by kind:   calls 5", "by source: lsp 5", "by conf:   exact 5"} {
+	for _, w := range []string{"edges:       5", "by kind:   calls 5", "by source: lsp 5", "by conf:   candidate 5"} {
 		if !strings.Contains(out, w) {
 			t.Errorf("stats lacks %q:\n%s", w, out)
 		}

@@ -406,19 +406,44 @@ var KnownServers = []struct {
 	{"c", Language{Command: "clangd", Extensions: []string{".c", ".h", ".cc", ".cpp", ".hpp"}, LanguageID: "cpp"}},
 }
 
-// Discover returns language entries for the servers found on the machine:
-// the known commands on PATH, and PowerShell Editor Services when pwsh is on
-// PATH and a start-pses.ps1 script is installed by a Claude Code plugin under
-// <home>/.claude/plugins/cache.
-func Discover(home string, lookPath func(string) (string, error)) map[string]Language {
+// WammybashName is the extractor `config init` defines for bash when the
+// wammybash tool is on PATH.
+const WammybashName = "wammybash"
+
+// wammybashExtensions are the files wammybash handles; it answers a .zsh file
+// with an error record, so .zsh (and .ksh) are left out.
+var wammybashExtensions = []string{".sh", ".bash"}
+
+// Discover returns the language entries and extractor definitions for the
+// tools found on the machine: the known language servers on PATH, PowerShell
+// Editor Services when pwsh is on PATH and a start-pses.ps1 script is installed
+// by a Claude Code plugin under <home>/.claude/plugins/cache, and wammybash.
+//
+// bash: when wammybash is on PATH the bash language uses it alone, as an exec
+// extractor (its func records give the symbols, its call records carry the
+// target file, a resolution and a reason, which a language server's references
+// cannot); a bash-language-server on PATH is then not configured. Without
+// wammybash, bash-language-server is the bash entry as before.
+func Discover(home string, lookPath func(string) (string, error)) (map[string]Language, map[string]Extractor) {
 	if lookPath == nil {
 		lookPath = exec.LookPath
 	}
 	langs := map[string]Language{}
+	exs := map[string]Extractor{}
 	for _, k := range KnownServers {
 		if _, err := lookPath(k.Lang.Command); err == nil {
 			langs[k.Name] = k.Lang
 		}
+	}
+	if _, err := lookPath(WammybashName); err == nil {
+		symbols := true
+		exs[WammybashName] = Extractor{
+			Type:        ExtractorExec,
+			Argv:        []string{WammybashName, "extract", "--root", "{root}", "--list-file", "{listFile}"},
+			VersionArgv: []string{WammybashName, "version"},
+			Symbols:     &symbols,
+		}
+		langs["bash"] = Language{Extensions: append([]string(nil), wammybashExtensions...), Extractor: WammybashName}
 	}
 	if _, err := lookPath("pwsh"); err == nil {
 		scripts, _ := filepath.Glob(filepath.Join(home, ".claude", "plugins", "cache", "*", "*", "*", "scripts", "start-pses.ps1"))
@@ -434,15 +459,17 @@ func Discover(home string, lookPath func(string) (string, error)) map[string]Lan
 			}
 		}
 	}
-	return langs
+	return langs, exs
 }
 
-// Init renders the default config file with the discovered languages.
-func Init(langs map[string]Language) []byte {
+// Init renders the default config file with the discovered languages and the
+// extractor definitions they name (Discover's two results).
+func Init(langs map[string]Language, exs map[string]Extractor) []byte {
 	off := false
 	c := Config{
-		Embed:     Embed{Enabled: &off, EmbedConfig: provider.EmbedConfig{Provider: provider.Ollama, Model: provider.DefaultEmbedModel}},
-		Languages: langs,
+		Embed:      Embed{Enabled: &off, EmbedConfig: provider.EmbedConfig{Provider: provider.Ollama, Model: provider.DefaultEmbedModel}},
+		Languages:  langs,
+		Extractors: exs,
 	}
 	r := c.Resolved()
 	o := r.out(InitComment)

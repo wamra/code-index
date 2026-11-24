@@ -72,10 +72,10 @@ func TestLSPReferencesBecomeCallsEdges(t *testing.T) {
 	}
 	// the declaration is skipped; a reference at the top level has the file as caller
 	wantLines(t, edgeLines(t, st),
-		"a.ps1:2 Alpha -> Beta [lsp exact]",
-		"b.ps1:4 Gamma -> Beta [lsp exact]",
-		"b.ps1:5 Gamma -> Beta [lsp exact]",
-		"b.ps1:7 (file) -> Beta [lsp exact]")
+		"a.ps1:2 Alpha -> Beta [lsp candidate]",
+		"b.ps1:4 Gamma -> Beta [lsp candidate]",
+		"b.ps1:5 Gamma -> Beta [lsp candidate]",
+		"b.ps1:7 (file) -> Beta [lsp candidate]")
 	if got := scalar(t, st, `SELECT count(*) FROM edges WHERE src_symbol_id IS NULL AND file_id=(SELECT id FROM files WHERE path='b.ps1')`); got != "1" {
 		t.Errorf("top-level edges in b.ps1 = %s", got)
 	}
@@ -119,9 +119,9 @@ func TestLSPReferencesBecomeCallsEdges(t *testing.T) {
 		t.Fatalf("edit: %+v opens=%d", res, opens)
 	}
 	wantLines(t, edgeLines(t, st),
-		"b.ps1:4 Gamma -> Beta [lsp exact]",
-		"b.ps1:5 Gamma -> Beta [lsp exact]",
-		"b.ps1:7 (file) -> Beta [lsp exact]")
+		"b.ps1:4 Gamma -> Beta [lsp candidate]",
+		"b.ps1:5 Gamma -> Beta [lsp candidate]",
+		"b.ps1:7 (file) -> Beta [lsp candidate]")
 	pending := func(name string) string {
 		return scalar(t, st, `SELECT c.embedded_at IS NULL FROM chunks c JOIN symbols s ON c.target_kind='symbol' AND c.target_id=s.id WHERE s.name=?`, name)
 	}
@@ -177,7 +177,7 @@ func TestMutualRecursionEdges(t *testing.T) {
 	root := tree(t, map[string]string{"c.ps1": "function A {\n  B\n}\nfunction B {\n  A\n}\n"})
 	st := openStore(t)
 	runOpts(t, st, fakeCfg("refs", ".ps1"), indexer.Options{Root: root})
-	wantLines(t, edgeLines(t, st), "c.ps1:2 A -> B [lsp exact]", "c.ps1:5 B -> A [lsp exact]")
+	wantLines(t, edgeLines(t, st), "c.ps1:2 A -> B [lsp candidate]", "c.ps1:5 B -> A [lsp candidate]")
 }
 
 // astSample serves the recorded extractor output for the fixture, with the

@@ -5,12 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode/utf16"
 
 	"github.com/wamra/code-index/internal/config"
 	"github.com/wamra/code-index/internal/extract"
@@ -291,37 +289,74 @@ type edgeStats struct {
 	Notes          []string
 }
 
-// computeEdges rebuilds every edge whose call site is in a file of lang: LSP
-// references (cl, when the server advertises them) merged with the records of
-// the language's exec extractors (exs, from Config.ExtractorsFor; lsp entries
-// are served by cl and skipped here). The rebuild covers
-// all files of the language, not only the changed ones: a change in one file
-// moves symbol ids and changes who references whom in the others.
-func computeEdges(ctx context.Context, st *store.Store, o Options, root, lang string, exs []config.NamedExtractor, lc config.Language, cl *lsp.Client) (edgeStats, error) {
+// sourced is a record together with the kind of extractor that wrote it: edges
+// from an lsp extractor are stored with source lsp, edges from an exec
+// extractor with source ast (so lsp+ast means both agree).
+type sourced struct {
+	extract.Record
+	lsp bool
+}
+
+// computeEdges rebuilds every edge whose call site is in a file of lang: the
+// records of the language's sessions (live, in run order; each one that
+// provides edges is asked for all the language's files its extensions select)
+// merged by edgeSet. The rebuild covers all files of the language, not only the
+// changed ones: a change in one file moves symbol ids and changes who calls
+// whom in the others. exts are the language's extensions (resolveFile).
+func computeEdges(ctx context.Context, st *store.Store, o Options, root, lang string, live []*liveSession, exts []string) (edgeStats, error) {
 	var es edgeStats
 	idx, err := loadIndex(ctx, st.DB(), root, lang)
 	if err != nil {
 		return es, err
 	}
-	idx.exts = lc.Extensions
+	idx.exts = exts
 	set := &edgeSet{}
-	if cl != nil {
-		if cl.Capabilities().References {
-			reqs, failed, first, err := lspEdges(ctx, cl, lc, idx, set)
-			if err != nil {
+	var recs []sourced
+	var ran []string
+	var known []extract.Record
+	haveKnown := false
+	for _, ls := range live {
+		if !ls.prov.Edges {
+			if ls.ne.Type == config.ExtractorLSP {
+				es.Notes = append(es.Notes, fmt.Sprintf("%s: extractor %s does not advertise references or call hierarchy; no LSP edges", lang, ls.ne.Name))
+			}
+			continue
+		}
+		files := filesWithExtensions(idx.files, ls.ne.Extensions)
+		if len(files) == 0 {
+			continue
+		}
+		if !haveKnown {
+			if known, err = knownSymbols(ctx, st.DB(), root, lang); err != nil {
 				return es, err
 			}
-			o.logf("  %s: %d references request(s)", lang, reqs)
-			if failed > 0 {
-				es.Notes = append(es.Notes, fmt.Sprintf("%s: %d of %d references request(s) failed (first: %v)", lang, failed, reqs, first))
-			}
-		} else {
-			es.Notes = append(es.Notes, fmt.Sprintf("%s: the server does not advertise references; no LSP edges", lang))
+			haveKnown = true
 		}
-	}
-	recs, ran, err := execRecords(ctx, o, root, lang, idx, exs, &es)
-	if err != nil {
-		return es, err
+		var got []extract.Record
+		err := ls.sess.Edges(ctx, files, known, func(_ string, rs []extract.Record) error {
+			got = append(got, rs...)
+			return nil
+		})
+		if n, ok := ls.sess.(extract.Noter); ok {
+			for _, line := range n.Notes() {
+				es.Notes = append(es.Notes, lang+": "+line)
+			}
+		}
+		switch {
+		case errors.Is(err, ErrExtractorUnavailable):
+			es.Notes = append(es.Notes, fmt.Sprintf("%s: %v; skipping the AST extractor %s", lang, err, ls.ne.Name))
+			continue
+		case err != nil:
+			return es, fmt.Errorf("extractor %s: %w", ls.ne.Name, err)
+		}
+		ran = append(ran, ls.ne.Name)
+		for _, r := range got {
+			if r.T == extract.TypeError {
+				es.Notes = append(es.Notes, fmt.Sprintf("%s: extractor failed on %s: %s", lang, r.File, r.Message))
+				continue
+			}
+			recs = append(recs, sourced{r, ls.ne.Type == config.ExtractorLSP})
+		}
 	}
 
 	hasVec := false
@@ -388,68 +423,6 @@ func deleteLangEdges(ctx context.Context, tx *sql.Tx, lang string, hasVec bool) 
 	return nil
 }
 
-// lspEdges asks the server for the references of every function-like symbol
-// and records each as a calls edge from the innermost container at the
-// reference. A failing request is counted and skipped; a dead server is fatal.
-func lspEdges(ctx context.Context, cl *lsp.Client, lc config.Language, idx *symIndex, set *edgeSet) (reqs, failed int, first error, fatal error) {
-	for _, f := range idx.files {
-		var targets []*symLoc
-		for _, s := range idx.byFile[f.id] {
-			if callableKinds[s.kind] {
-				targets = append(targets, s)
-			}
-		}
-		if len(targets) == 0 {
-			continue
-		}
-		data, err := os.ReadFile(f.abs)
-		if err != nil {
-			continue
-		}
-		text := strings.TrimPrefix(strings.ToValidUTF8(string(data), "\ufffd"), "\ufeff")
-		uri := lsp.PathToURI(f.abs)
-		if err := cl.DidOpen(uri, lc.LanguageID, 1, text); err != nil {
-			return reqs, failed, first, err
-		}
-		for _, t := range targets {
-			if err := ctx.Err(); err != nil {
-				cl.DidClose(uri)
-				return reqs, failed, first, err
-			}
-			reqs++
-			locs, err := cl.References(ctx, uri, lsp.Position{Line: t.selLine, Character: t.selCol})
-			if err != nil {
-				if errors.Is(err, lsp.ErrClosed) {
-					return reqs, failed, first, err
-				}
-				failed++
-				if first == nil {
-					first = err
-				}
-				continue
-			}
-			selEnd := t.selCol + len(utf16.Encode([]rune(t.name)))
-			for _, l := range locs {
-				rf := idx.fileForURI(l.URI)
-				if rf == nil {
-					continue
-				}
-				p := l.Range.Start
-				if rf.id == f.id && p.Line == t.selLine && p.Character >= t.selCol && p.Character < selEnd {
-					continue // the declaration itself
-				}
-				e := edgeRow{dst: t.id, kind: EdgeCalls, file: rf.id, line: p.Line, col: p.Character, lsp: true, conf: ConfExact}
-				if c := idx.container(rf.id, p.Line, p.Character); c != nil {
-					e.src = c.id
-				}
-				set.add(e)
-			}
-		}
-		cl.DidClose(uri)
-	}
-	return reqs, failed, first, nil
-}
-
 // astResult is what astEdges counted besides the edges it added.
 type astResult struct {
 	aliases      int // alias symbols created
@@ -460,7 +433,7 @@ type astResult struct {
 // astEdges turns the extractor records into alias symbols (inserted in tx)
 // and edges (added to set); docs/extractors.md says how each record type is
 // read.
-func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []extract.Record, set *edgeSet) (astResult, error) {
+func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []sourced, set *edgeSet) (astResult, error) {
 	var res astResult
 	aliasTarget := map[string]string{} // lower alias -> target text
 	aliasID := map[string]int64{}
@@ -528,7 +501,7 @@ func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []extract.Rec
 		if f == nil {
 			continue
 		}
-		e := edgeRow{file: f.id, line: max(r.Line-1, 0), col: max(r.Col-1, 0), ast: true, reason: r.Reason}
+		e := edgeRow{file: f.id, line: max(r.Line-1, 0), col: max(r.Col-1, 0), lsp: r.lsp, ast: !r.lsp, reason: r.Reason}
 		rres, valid := extract.NormalizeResolution(r.T, r.Resolution, r.Reason)
 		switch r.T {
 		case extract.TypeAlias:
@@ -548,7 +521,7 @@ func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []extract.Rec
 				res.noResolution++
 				continue
 			}
-			e.kind, e.src, e.dstName = EdgeCalls, srcOf(r, f), r.Name
+			e.kind, e.src, e.dstName = EdgeCalls, srcOf(r.Record, f), r.Name
 			if r.To != "" {
 				// The record names the file that holds the definition: look there, never by name alone.
 				tf := idx.fileForAbs(r.To)
@@ -560,7 +533,7 @@ func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []extract.Rec
 					res.notIndexed++
 					continue
 				}
-				e.dst, e.conf, e.hasTo = t.id, rres, true
+				e.dst, e.conf, e.hasTo = t.id, rres, !r.lsp // an lsp edge is evidence, not the authority on its site
 				break
 			}
 			// Name only. The alias table and pickFunc decide as they always did;
@@ -580,7 +553,7 @@ func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []extract.Rec
 				e.conf = ConfCandidate
 			}
 		case extract.TypeDynamic:
-			e.kind, e.src, e.dstName, e.conf = EdgeCalls, srcOf(r, f), r.Expr, ConfDynamic
+			e.kind, e.src, e.dstName, e.conf = EdgeCalls, srcOf(r.Record, f), r.Expr, ConfDynamic
 		case extract.TypeDotSource, extract.TypeImport:
 			if rres == ConfUnresolved {
 				continue
@@ -596,7 +569,7 @@ func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []extract.Rec
 			if target == nil {
 				continue
 			}
-			e.src, e.dstName, e.conf = srcOf(r, f), target.path, ConfExact
+			e.src, e.dstName, e.conf = srcOf(r.Record, f), target.path, ConfExact
 		case extract.TypeInvoke:
 			if rres == ConfUnresolved {
 				continue
@@ -605,7 +578,7 @@ func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []extract.Rec
 			if r.Path == "" || target == nil {
 				continue
 			}
-			e.kind, e.src, e.dstName, e.conf = EdgeInvokes, srcOf(r, f), target.path, rres
+			e.kind, e.src, e.dstName, e.conf = EdgeInvokes, srcOf(r.Record, f), target.path, rres
 		default:
 			continue
 		}
@@ -804,65 +777,6 @@ func refreshLinks(ctx context.Context, st *store.Store) (int, error) {
 		changed++
 	}
 	return changed, tx.Commit()
-}
-
-// execRecords runs every exec extractor of the language (exs, in run order)
-// over the files its extensions select and returns all their records, with the
-// names of the extractors that ran. An unavailable extractor adds one note and
-// is skipped; any other failure ends the language's edges. Notes go to es.
-func execRecords(ctx context.Context, o Options, root, lang string, idx *symIndex, exs []config.NamedExtractor, es *edgeStats) ([]extract.Record, []string, error) {
-	var recs []extract.Record
-	var ran []string
-	for _, ne := range exs {
-		if ne.Type != config.ExtractorExec {
-			continue
-		}
-		files := filesWithExtensions(idx.files, ne.Extensions)
-		if len(files) == 0 {
-			continue
-		}
-		got, notes, err := runExec(ctx, o, root, lang, ne, files)
-		es.Notes = append(es.Notes, notes...)
-		switch {
-		case errors.Is(err, ErrExtractorUnavailable):
-			es.Notes = append(es.Notes, fmt.Sprintf("%s: %v; skipping the AST extractor", lang, err))
-			continue
-		case err != nil:
-			return nil, nil, fmt.Errorf("extractor %s: %w", ne.Name, err)
-		}
-		ran = append(ran, ne.Name)
-		recs = append(recs, got...)
-		for _, r := range got {
-			if r.T == extract.TypeError {
-				es.Notes = append(es.Notes, fmt.Sprintf("%s: extractor failed on %s: %s", lang, r.File, r.Message))
-			}
-		}
-	}
-	return recs, ran, nil
-}
-
-// runExec starts one exec extractor, runs its edge phase over files and closes it.
-// notes are the session's own remarks (non-JSON lines), prefixed with the language.
-func runExec(ctx context.Context, o Options, root, lang string, ne config.NamedExtractor, files []string) (recs []extract.Record, notes []string, err error) {
-	ex, err := extract.New(lang, ne.Name, ne.Extractor)
-	if err != nil {
-		return nil, nil, err
-	}
-	sess, err := ex.Start(ctx, extract.Env{Root: root, Exec: o.Extract, Logf: o.logf})
-	if err != nil {
-		return nil, nil, err
-	}
-	defer sess.Close()
-	err = sess.Edges(ctx, files, nil, func(_ string, rs []extract.Record) error {
-		recs = append(recs, rs...)
-		return nil
-	})
-	if n, ok := sess.(extract.Noter); ok {
-		for _, line := range n.Notes() {
-			notes = append(notes, lang+": "+line)
-		}
-	}
-	return recs, notes, err
 }
 
 // filesWithExtensions returns the absolute paths of the files whose extension

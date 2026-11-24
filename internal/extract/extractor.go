@@ -3,6 +3,7 @@ package extract
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/wamra/code-index/internal/lsp"
 )
@@ -27,6 +28,10 @@ type Env struct {
 	OpenLSP func(lsp.Spec) (*lsp.Client, error)
 	// Exec, when not nil, replaces an exec extractor's subprocess (see ExecFunc).
 	Exec ExecFunc
+	// EmptyRetryDelays overrides the waits an lsp session makes before re-asking
+	// for symbols after an empty answer (nil = the package variable
+	// EmptyRetryDelays). It is indexer.Options.EmptyRetryDelays.
+	EmptyRetryDelays []time.Duration
 	// Logf logs one progress line; nil discards. It is the run's log, so lines
 	// should be short and indented like the indexer's own ("  <what>").
 	Logf func(format string, args ...any)
