@@ -50,3 +50,25 @@ func TestOpenAddsEdgesReasonToOldDatabase(t *testing.T) {
 		st.Close()
 	}
 }
+
+// Two processes opening an old database at once can both see the column
+// missing; the loser's ALTER fails with "duplicate column name", which means
+// the column exists and is not an error.
+func TestAlterAddColumnToleratesDuplicateColumn(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "x.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	// edges.reason exists after Open: this ALTER is what the losing process runs
+	if err := alterAddColumn(st.DB(), "edges", "reason", "TEXT"); err != nil {
+		t.Fatalf("duplicate column must be treated as success: %v", err)
+	}
+	// other ALTER failures are still errors
+	if err := alterAddColumn(st.DB(), "no_such_table", "c", "TEXT"); err == nil {
+		t.Fatal("an ALTER on a missing table must still fail")
+	}
+	if err := addColumn(st.DB(), "edges", "reason", "TEXT"); err != nil {
+		t.Fatalf("addColumn on an existing column: %v", err)
+	}
+}

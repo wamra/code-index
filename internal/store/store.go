@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 
 	_ "github.com/asg017/sqlite-vec-go-bindings/ncruces"
@@ -145,7 +146,17 @@ func addColumn(db *sql.DB, table, column, typ string) error {
 	if err := rows.Err(); err != nil || found {
 		return err
 	}
-	_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + typ)
+	return alterAddColumn(db, table, column, typ)
+}
+
+// alterAddColumn runs the ALTER TABLE. "duplicate column name" is success: another
+// process opening the same old database added the column between our check
+// and our ALTER.
+func alterAddColumn(db *sql.DB, table, column, typ string) error {
+	_, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + typ)
+	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
+		return nil
+	}
 	return err
 }
 
