@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"runtime/pprof"
 	"sort"
 )
 
@@ -80,7 +81,37 @@ func run(args []string, out, errw io.Writer) int {
 	return c.run(args[1:], out, errw)
 }
 
-func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
+func main() { os.Exit(runProfiled(os.Args[1:], os.Stdout, os.Stderr)) }
+
+// EnvCPUProfile names a file to which a run writes a CPU profile (read it with
+// `go tool pprof -top code-index FILE`).
+const EnvCPUProfile = "CODE_INDEX_CPUPROFILE"
+
+// runProfiled is run with a CPU profile written to $CODE_INDEX_CPUPROFILE when
+// that is set. A file that cannot be created or a profile that cannot start is
+// reported on errw and the command runs unprofiled.
+func runProfiled(args []string, out, errw io.Writer) int {
+	path := os.Getenv(EnvCPUProfile)
+	if path == "" {
+		return run(args, out, errw)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		fmt.Fprintf(errw, "code-index: %s: %v\n", EnvCPUProfile, err)
+		return run(args, out, errw)
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		fmt.Fprintf(errw, "code-index: %s: %v\n", EnvCPUProfile, err)
+		f.Close()
+		return run(args, out, errw)
+	}
+	code := run(args, out, errw)
+	pprof.StopCPUProfile()
+	if err := f.Close(); err != nil {
+		fmt.Fprintf(errw, "code-index: %s: %v\n", EnvCPUProfile, err)
+	}
+	return code
+}
 
 func newFlags(name string, errw io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
