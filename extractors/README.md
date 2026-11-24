@@ -413,7 +413,7 @@ runs gopls when `CODE_INDEX_REAL_LSP=gopls`.
 ### 3.6 Writing an exec extractor
 
 Any program that reads a list of absolute paths and prints one JSON object per
-line works. This one (shell, 9 lines; run once through `index`, it stored the
+line works. This one (shell, 8 lines; run once through `index`, it stored the
 two functions of a test file as symbols) prints a `func` record for every
 `name()` line of every listed file:
 
