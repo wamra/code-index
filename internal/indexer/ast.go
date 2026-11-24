@@ -1,15 +1,11 @@
 package indexer
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wamra/code-index/extractors"
+	"github.com/wamra/code-index/internal/extract"
 )
 
 // ExtractorPowerShellAST is the config value of a language's "extractor" that
@@ -25,51 +22,12 @@ import (
 const ExtractorPowerShellAST = "powershell-ast"
 
 // ErrExtractorUnavailable means the interpreter an extractor needs is missing.
-var ErrExtractorUnavailable = errors.New("extractor interpreter not found")
+// It is extract.ErrExtractorUnavailable, so errors.Is matches either name.
+var ErrExtractorUnavailable = extract.ErrExtractorUnavailable
 
 // ExtractFunc runs the named extractor over absolute file paths and returns
 // its JSON-lines output.
-type ExtractFunc func(ctx context.Context, name string, files []string) ([]byte, error)
-
-// astRec is one JSON line of the PowerShell extractor. Line and Col are
-// 1-based, as the PowerShell parser reports them.
-type astRec struct {
-	T       string `json:"t"` // func | alias | call | dynamic | dotsource | import | parse_error | error
-	File    string `json:"file"`
-	Name    string `json:"name"`
-	Alias   string `json:"alias"`
-	Target  string `json:"target"`
-	Path    string `json:"path"`
-	Expr    string `json:"expr"`
-	In      string `json:"in"`
-	Message string `json:"message"`
-	First   string `json:"first"`
-	Line    int    `json:"line"`
-	Col     int    `json:"col"`
-	EndLine int    `json:"endLine"`
-	EndCol  int    `json:"endCol"`
-	Count   int    `json:"count"`
-}
-
-// parseASTLines decodes the extractor output. Lines that are not JSON objects
-// (a warning pwsh printed to stdout, say) are counted and skipped.
-func parseASTLines(r io.Reader) (recs []astRec, skipped int, err error) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
-	for sc.Scan() {
-		line := bytes.TrimSpace(sc.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		var rec astRec
-		if line[0] != '{' || json.Unmarshal(line, &rec) != nil || rec.T == "" {
-			skipped++
-			continue
-		}
-		recs = append(recs, rec)
-	}
-	return recs, skipped, sc.Err()
-}
+type ExtractFunc = extract.ExecFunc
 
 // PowerShellEnv names an environment variable that overrides the PowerShell
 // interpreter (a path or a name on PATH).

@@ -14,6 +14,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/wamra/code-index/internal/config"
+	"github.com/wamra/code-index/internal/extract"
 	"github.com/wamra/code-index/internal/lsp"
 	"github.com/wamra/code-index/internal/store"
 )
@@ -24,11 +25,13 @@ const (
 	EdgeAliasOf    = "alias_of"
 	EdgeImports    = "imports"
 	EdgeDotSources = "dot_sources"
+	EdgeInvokes    = "invokes" // a workspace file executed as a child process
 
-	ConfExact      = "exact"
-	ConfAlias      = "alias"
-	ConfDynamic    = "dynamic"
-	ConfUnresolved = "unresolved"
+	ConfExact      = extract.ResExact
+	ConfAlias      = extract.ResAlias
+	ConfCandidate  = extract.ResCandidate
+	ConfDynamic    = extract.ResDynamic
+	ConfUnresolved = extract.ResUnresolved
 )
 
 // edgeRow is an edge before it is written. src and dst are symbol ids; src 0
@@ -42,6 +45,8 @@ type edgeRow struct {
 	line, col int // zero-based, like the symbols table
 	lsp, ast  bool
 	conf      string
+	reason    string // why the extractor chose the edge; empty when it said nothing
+	hasTo     bool   // the record named the target file ("to"): authoritative for its call site
 }
 
 func (e *edgeRow) key() string {
@@ -193,6 +198,19 @@ func pickFunc(c []*symLoc, fromFile int64) *symLoc {
 }
 
 // edgeSet merges edges found by more than one source into one row.
+//
+// Rows with the same key (kind, caller, callee, call site) merge: the source
+// becomes lsp+ast when both found it. Confidence and reason of the merged row:
+//   - when exactly one of the two edges carried "to" (hasTo), that edge decides
+//     both: it is the extractor's statement about the exact destination;
+//   - otherwise the stronger confidence wins (exact > alias > candidate), with
+//     the reason of the edge that supplied it; on a tie the record's (ast)
+//     reason is kept when it has one, else the first non-empty reason.
+//
+// An edge with hasTo is also authoritative for its call site (file, line,
+// col): sorted drops every LSP-only calls edge at that site whose destination
+// is not one of the destinations the records named there. The result does not
+// depend on the order of add calls.
 type edgeSet struct{ m map[string]*edgeRow }
 
 func (s *edgeSet) add(e edgeRow) {
@@ -200,23 +218,56 @@ func (s *edgeSet) add(e edgeRow) {
 		s.m = map[string]*edgeRow{}
 	}
 	k := e.key()
-	if old, ok := s.m[k]; ok {
-		old.lsp = old.lsp || e.lsp
-		old.ast = old.ast || e.ast
-		if e.ast && e.dstName != "" {
-			old.dstName = e.dstName
-		}
-		if old.lsp {
-			old.conf = ConfExact
-		}
+	old, ok := s.m[k]
+	if !ok {
+		s.m[k] = &e
 		return
 	}
-	s.m[k] = &e
+	old.lsp = old.lsp || e.lsp
+	old.ast = old.ast || e.ast
+	if e.ast && e.dstName != "" {
+		old.dstName = e.dstName
+	}
+	switch {
+	case e.hasTo && !old.hasTo:
+		old.conf, old.reason, old.hasTo = e.conf, e.reason, true
+	case old.hasTo && !e.hasTo:
+		// the earlier record edge keeps its confidence and reason
+	default:
+		oc, ec := extract.Strength(old.conf), extract.Strength(e.conf)
+		switch {
+		case ec > oc:
+			old.conf, old.reason = e.conf, e.reason
+		case ec == oc && e.ast && e.reason != "":
+			old.reason = e.reason
+		case ec == oc && old.reason == "":
+			old.reason = e.reason
+		}
+	}
+}
+
+// siteKey identifies a call site.
+type siteKey struct {
+	file      int64
+	line, col int
 }
 
 func (s *edgeSet) sorted() []*edgeRow {
+	named := map[siteKey]map[int64]bool{} // call sites that records gave a target file for -> destinations
+	for _, e := range s.m {
+		if e.hasTo && e.kind == EdgeCalls {
+			k := siteKey{e.file, e.line, e.col}
+			if named[k] == nil {
+				named[k] = map[int64]bool{}
+			}
+			named[k][e.dst] = true
+		}
+	}
 	out := make([]*edgeRow, 0, len(s.m))
 	for _, e := range s.m {
+		if dsts := named[siteKey{e.file, e.line, e.col}]; dsts != nil && e.kind == EdgeCalls && e.lsp && !e.ast && !dsts[e.dst] {
+			continue
+		}
 		out = append(out, e)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -266,7 +317,7 @@ func computeEdges(ctx context.Context, st *store.Store, o Options, root, lang st
 			es.Notes = append(es.Notes, fmt.Sprintf("%s: the server does not advertise references; no LSP edges", lang))
 		}
 	}
-	var recs []astRec
+	var recs []extract.Record
 	if lc.Extractor != "" {
 		var files []string
 		for _, f := range idx.files {
@@ -275,11 +326,11 @@ func computeEdges(ctx context.Context, st *store.Store, o Options, root, lang st
 			}
 		}
 		if len(files) > 0 {
-			extract := o.Extract
-			if extract == nil {
-				extract = defaultExtract
+			run := o.Extract
+			if run == nil {
+				run = defaultExtract
 			}
-			out, err := extract(ctx, lc.Extractor, files)
+			out, err := run(ctx, string(lc.Extractor), files)
 			switch {
 			case errors.Is(err, ErrExtractorUnavailable):
 				es.Notes = append(es.Notes, fmt.Sprintf("%s: %v; skipping the AST extractor", lang, err))
@@ -287,7 +338,7 @@ func computeEdges(ctx context.Context, st *store.Store, o Options, root, lang st
 				return es, fmt.Errorf("extractor %s: %w", lc.Extractor, err)
 			default:
 				var skipped int
-				recs, skipped, err = parseASTLines(bytes.NewReader(out))
+				recs, skipped, err = extract.ParseLines(bytes.NewReader(out))
 				if err != nil {
 					return es, err
 				}
@@ -315,11 +366,17 @@ func computeEdges(ctx context.Context, st *store.Store, o Options, root, lang st
 	if err := deleteLangEdges(ctx, tx, lang, hasVec); err != nil {
 		return es, err
 	}
-	n, err := astEdges(ctx, tx, idx, recs, set)
+	ar, err := astEdges(ctx, tx, idx, recs, set)
 	if err != nil {
 		return es, err
 	}
-	es.Aliases = n
+	es.Aliases = ar.aliases
+	if ar.noResolution > 0 {
+		es.Notes = append(es.Notes, fmt.Sprintf("%s: ignored %d call record(s) without a resolution (extractor %s writes schema v1)", lang, ar.noResolution, lc.Extractor))
+	}
+	if ar.notIndexed > 0 {
+		es.Notes = append(es.Notes, fmt.Sprintf("%s: %d call record(s) point to a definition that is not indexed", lang, ar.notIndexed))
+	}
 	for _, e := range set.sorted() {
 		var src, dst any
 		if e.src != 0 {
@@ -328,8 +385,8 @@ func computeEdges(ctx context.Context, st *store.Store, o Options, root, lang st
 		if e.dst != 0 {
 			dst = e.dst
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO edges(src_symbol_id, dst_symbol_id, dst_name, kind, file_id, line, col, source, confidence)
-			VALUES (?,?,?,?,?,?,?,?,?)`, src, dst, nullIf(e.dstName), e.kind, e.file, e.line, e.col, e.sourceName(), e.conf); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO edges(src_symbol_id, dst_symbol_id, dst_name, kind, file_id, line, col, source, confidence, reason)
+			VALUES (?,?,?,?,?,?,?,?,?,?)`, src, dst, nullIf(e.dstName), e.kind, e.file, e.line, e.col, e.sourceName(), e.conf, nullIf(e.reason)); err != nil {
 			return es, err
 		}
 		es.Edges++
@@ -423,12 +480,20 @@ func lspEdges(ctx context.Context, cl *lsp.Client, lc config.Language, idx *symI
 	return reqs, failed, first, nil
 }
 
+// astResult is what astEdges counted besides the edges it added.
+type astResult struct {
+	aliases      int // alias symbols created
+	noResolution int // call records rejected for lacking a valid resolution
+	notIndexed   int // call records whose "to" file or symbol is not indexed
+}
+
 // astEdges turns the extractor records into alias symbols (inserted in tx)
-// and edges (added to set). It returns the number of alias symbols created.
-func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []astRec, set *edgeSet) (int, error) {
+// and edges (added to set); docs/extractors.md says how each record type is
+// read.
+func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []extract.Record, set *edgeSet) (astResult, error) {
+	var res astResult
 	aliasTarget := map[string]string{} // lower alias -> target text
 	aliasID := map[string]int64{}
-	aliases := 0
 	for _, r := range recs {
 		if r.T != "alias" || r.Alias == "" || r.Target == "" {
 			continue
@@ -440,21 +505,21 @@ func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []astRec, set
 		line, col := max(r.Line-1, 0), max(r.Col-1, 0)
 		endLine, endCol := max(r.EndLine-1, line), max(r.EndCol-1, col)
 		sig := r.Alias + " -> " + r.Target
-		res, err := tx.ExecContext(ctx, `INSERT INTO symbols(file_id, name, qualified_name, kind, parent_id,
+		ins, err := tx.ExecContext(ctx, `INSERT INTO symbols(file_id, name, qualified_name, kind, parent_id,
 			start_line, start_col, end_line, end_col, sel_line, sel_col, signature, doc, body_sha256, source)
 			VALUES (?,?,?,?,NULL,?,?,?,?,?,?,?,NULL,?, 'ast')`,
 			f.id, r.Alias, r.Alias, "alias", line, col, endLine, endCol, line, col, sig, sha256Hex([]byte(sig)))
 		if err != nil {
-			return 0, err
+			return res, err
 		}
-		id, _ := res.LastInsertId()
+		id, _ := ins.LastInsertId()
 		if _, err := tx.ExecContext(ctx, `INSERT INTO name_fts(rowid, name, qualified_name, path) VALUES (?,?,?,?)`, id, r.Alias, r.Alias, f.path); err != nil {
-			return 0, err
+			return res, err
 		}
 		if err := addChunk(ctx, tx, "symbol", id, f.id, SymbolChunk("alias", r.Alias, f.path, sig, "")); err != nil {
-			return 0, err
+			return res, err
 		}
-		aliases++
+		res.aliases++
 		k := strings.ToLower(r.Alias)
 		if _, dup := aliasTarget[k]; !dup {
 			aliasTarget[k] = r.Target
@@ -474,7 +539,7 @@ func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []astRec, set
 		}
 		return pickFunc(idx.funcs[strings.ToLower(name)], from)
 	}
-	srcOf := func(r astRec, f *fileInfo) int64 {
+	srcOf := func(r extract.Record, f *fileInfo) int64 {
 		if c := idx.container(f.id, r.Line-1, r.Col-1); c != nil {
 			return c.id
 		}
@@ -493,9 +558,10 @@ func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []astRec, set
 		if f == nil {
 			continue
 		}
-		e := edgeRow{file: f.id, line: max(r.Line-1, 0), col: max(r.Col-1, 0), ast: true}
+		e := edgeRow{file: f.id, line: max(r.Line-1, 0), col: max(r.Col-1, 0), ast: true, reason: r.Reason}
+		rres, valid := extract.NormalizeResolution(r.T, r.Resolution, r.Reason)
 		switch r.T {
-		case "alias":
+		case extract.TypeAlias:
 			id, ok := aliasID[strings.ToLower(r.Alias)]
 			if !ok {
 				continue
@@ -504,11 +570,31 @@ func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []astRec, set
 			if t := resolve(r.Target, f.id); t != nil {
 				e.dst, e.conf = t.id, ConfExact
 			}
-		case "call":
+		case extract.TypeCall:
 			if r.Name == "" {
 				continue
 			}
+			if !valid {
+				res.noResolution++
+				continue
+			}
 			e.kind, e.src, e.dstName = EdgeCalls, srcOf(r, f), r.Name
+			if r.To != "" {
+				// The record names the file that holds the definition: look there, never by name alone.
+				tf := idx.fileForAbs(r.To)
+				var t *symLoc
+				if tf != nil {
+					t = idx.symbolIn(tf.id, r.Name, r.ToLine, r.ToCol)
+				}
+				if t == nil {
+					res.notIndexed++
+					continue
+				}
+				e.dst, e.conf, e.hasTo = t.id, rres, true
+				break
+			}
+			// Name only. The alias table and pickFunc decide as they always did;
+			// an extractor that is not sure marks the edge candidate.
 			if _, isAlias := aliasTarget[strings.ToLower(r.Name)]; isAlias {
 				if t := resolve(r.Name, f.id); t != nil {
 					e.dst, e.conf = t.id, ConfAlias
@@ -520,11 +606,17 @@ func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []astRec, set
 			} else {
 				continue // a built-in or external command: not part of the workspace graph
 			}
-		case "dynamic":
+			if rres == ConfCandidate && (e.conf == ConfExact || e.conf == ConfAlias) {
+				e.conf = ConfCandidate
+			}
+		case extract.TypeDynamic:
 			e.kind, e.src, e.dstName, e.conf = EdgeCalls, srcOf(r, f), r.Expr, ConfDynamic
-		case "dotsource", "import":
+		case extract.TypeDotSource, extract.TypeImport:
+			if rres == ConfUnresolved {
+				continue
+			}
 			var target *fileInfo
-			if r.T == "dotsource" {
+			if r.T == extract.TypeDotSource {
 				e.kind = EdgeDotSources
 				target = idx.resolveFile(f, r.Path, false)
 			} else {
@@ -535,12 +627,47 @@ func astEdges(ctx context.Context, tx *sql.Tx, idx *symIndex, recs []astRec, set
 				continue
 			}
 			e.src, e.dstName, e.conf = srcOf(r, f), target.path, ConfExact
+		case extract.TypeInvoke:
+			if rres == ConfUnresolved {
+				continue
+			}
+			target := idx.fileForAbs(r.Path)
+			if r.Path == "" || target == nil {
+				continue
+			}
+			e.kind, e.src, e.dstName, e.conf = EdgeInvokes, srcOf(r, f), target.path, rres
 		default:
 			continue
 		}
 		set.add(e)
 	}
-	return aliases, nil
+	return res, nil
+}
+
+// symbolIn returns the callable symbol called name in the file: with a 1-based
+// position (line > 0), the one whose name is at that position; else, or when
+// none is there, the exact-case match, then the case-insensitive match, the
+// first by position. nil when the file has no such symbol.
+func (x *symIndex) symbolIn(fileID int64, name string, line, col int) *symLoc {
+	var exact, folded *symLoc
+	for _, s := range x.byFile[fileID] {
+		if !callableKinds[s.kind] || !strings.EqualFold(s.name, name) {
+			continue
+		}
+		if line > 0 && s.selLine == line-1 && s.selCol == max(col-1, 0) {
+			return s
+		}
+		if folded == nil {
+			folded = s
+		}
+		if exact == nil && s.name == name {
+			exact = s
+		}
+	}
+	if exact != nil {
+		return exact
+	}
+	return folded
 }
 
 // resolveFile finds the indexed file a dot-sourced or imported path names. The

@@ -26,13 +26,14 @@ type edgeOut struct {
 	Via        string `json:"via,omitempty"`
 	Source     string `json:"source"`
 	Confidence string `json:"confidence"`
+	Reason     string `json:"reason,omitempty"` // why the extractor chose the edge; empty when it said nothing
 	Depth      int    `json:"depth,omitempty"`
 	srcID      int64
 	dstID      int64
 }
 
 const edgeSelect = `SELECT COALESCE(e.src_symbol_id,0), COALESCE(e.dst_symbol_id,0), COALESCE(e.dst_name,''), e.kind, f.path, e.line+1, e.col+1,
-	e.source, e.confidence, COALESCE(ss.qualified_name,''), COALESCE(ss.kind,''), COALESCE(ds.qualified_name,''), COALESCE(ds.kind,'')
+	e.source, e.confidence, COALESCE(e.reason,''), COALESCE(ss.qualified_name,''), COALESCE(ss.kind,''), COALESCE(ds.qualified_name,''), COALESCE(ds.kind,'')
 	FROM edges e JOIN files f ON f.id = e.file_id
 	LEFT JOIN symbols ss ON ss.id = e.src_symbol_id LEFT JOIN symbols ds ON ds.id = e.dst_symbol_id`
 
@@ -46,7 +47,7 @@ func queryEdges(ctx context.Context, db *sql.DB, where string, args ...any) ([]e
 	for rows.Next() {
 		var e edgeOut
 		var dstName string
-		if err := rows.Scan(&e.srcID, &e.dstID, &dstName, &e.Kind, &e.Path, &e.Line, &e.Col, &e.Source, &e.Confidence, &e.From, &e.FromKind, &e.To, &e.ToKind); err != nil {
+		if err := rows.Scan(&e.srcID, &e.dstID, &dstName, &e.Kind, &e.Path, &e.Line, &e.Col, &e.Source, &e.Confidence, &e.Reason, &e.From, &e.FromKind, &e.To, &e.ToKind); err != nil {
 			return nil, err
 		}
 		if e.srcID == 0 {
@@ -63,7 +64,15 @@ func queryEdges(ctx context.Context, db *sql.DB, where string, args ...any) ([]e
 	return out, rows.Err()
 }
 
-func (e edgeOut) tag() string { return "[" + e.Source + " " + e.Confidence + "]" }
+// tag is "[source confidence]", or "[source confidence reason]" when the edge
+// has a reason.
+func (e edgeOut) tag() string {
+	t := e.Source + " " + e.Confidence
+	if e.Reason != "" {
+		t += " " + e.Reason
+	}
+	return "[" + t + "]"
+}
 
 func (e edgeOut) name(callers bool) string {
 	n := e.To

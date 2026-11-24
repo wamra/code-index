@@ -1,0 +1,35 @@
+{"col":8,"expr":"./lib/hooks.sh","file":"<root>/app.sh","line":2,"path":"<root>/lib/hooks.sh","reason":"direct","resolution":"resolved","t":"dotsource"}
+{"col":1,"endCol":30,"endLine":3,"file":"<root>/app.sh","line":3,"name":"on_start","t":"func"}
+{"col":5,"expr":"\"$f\"","file":"<root>/app.sh","line":5,"path":"<root>/plugins/a.sh","reason":"direct","resolution":"resolved","t":"dotsource"}
+{"col":1,"file":"<root>/app.sh","line":7,"name":"run_hooks","reason":"direct","resolution":"resolved","t":"call","to":"<root>/lib/hooks.sh"}
+{"col":1,"file":"<root>/app.sh","line":8,"name":"plugin_a","reason":"direct","resolution":"resolved","t":"call","to":"<root>/plugins/a.sh"}
+{"col":1,"count":1,"file":"<root>/broken_exp.sh","first":"not a valid parameter expansion operator: \"\\n\"","line":1,"t":"parse_error"}
+{"col":1,"endCol":27,"endLine":2,"file":"<root>/broken_exp.sh","line":2,"name":"before_exp","t":"func"}
+{"col":1,"endCol":26,"endLine":4,"file":"<root>/broken_exp.sh","line":4,"name":"after_exp","t":"func"}
+{"col":1,"file":"<root>/broken_exp.sh","line":5,"name":"after_exp","reason":"direct","resolution":"resolved","t":"call","to":"<root>/broken_exp.sh"}
+{"col":1,"count":1,"file":"<root>/broken_fi.sh","first":"missing fi","line":1,"t":"parse_error"}
+{"col":1,"endCol":29,"endLine":2,"file":"<root>/broken_fi.sh","line":2,"name":"before_break","t":"func"}
+{"col":3,"file":"<root>/broken_fi.sh","line":4,"name":"before_break","reason":"direct","resolution":"resolved","t":"call","to":"<root>/broken_fi.sh"}
+{"col":1,"endCol":25,"endLine":5,"file":"<root>/broken_fi.sh","line":5,"name":"after_fi","t":"func"}
+{"col":1,"file":"<root>/broken_fi.sh","line":6,"name":"after_fi","reason":"direct","resolution":"resolved","t":"call","to":"<root>/broken_fi.sh"}
+{"col":8,"expr":"\"$HERE/lib/util.sh\"","file":"<root>/dyn.sh","line":3,"path":"<root>/lib/util.sh","reason":"direct","resolution":"resolved","t":"dotsource"}
+{"col":1,"file":"<root>/dyn.sh","line":4,"name":"build_release","reason":"direct","resolution":"resolved","t":"call","to":"<root>/lib/util.sh"}
+{"col":1,"endCol":2,"endLine":5,"file":"<root>/lib/hooks.sh","line":3,"name":"run_hooks","t":"func"}
+{"col":3,"file":"<root>/lib/hooks.sh","in":"run_hooks","line":4,"name":"on_start","reason":"direct","resolution":"resolved","t":"call","to":"<root>/app.sh"}
+{"col":1,"endCol":34,"endLine":3,"file":"<root>/lib/util.sh","line":3,"name":"log","t":"func"}
+{"col":1,"endCol":2,"endLine":7,"file":"<root>/lib/util.sh","line":4,"name":"build_release","t":"func"}
+{"col":3,"file":"<root>/lib/util.sh","in":"build_release","line":6,"name":"log","reason":"direct","resolution":"resolved","t":"call","to":"<root>/lib/util.sh"}
+{"col":8,"expr":"./lib/util.sh","file":"<root>/main.sh","line":2,"path":"<root>/lib/util.sh","reason":"direct","resolution":"resolved","t":"dotsource"}
+{"alias":"br","col":7,"endCol":9,"endLine":3,"file":"<root>/main.sh","line":3,"t":"alias","target":"build_release"}
+{"col":1,"endCol":2,"endLine":12,"file":"<root>/main.sh","line":4,"name":"deploy","t":"func"}
+{"col":3,"file":"<root>/main.sh","in":"deploy","line":6,"name":"build_release","reason":"direct","resolution":"resolved","t":"call","to":"<root>/lib/util.sh"}
+{"col":3,"file":"<root>/main.sh","in":"deploy","line":7,"name":"build_release","reason":"alias","resolution":"resolved","t":"call","to":"<root>/lib/util.sh"}
+{"col":3,"file":"<root>/main.sh","in":"deploy","line":9,"name":"build_release","reason":"variable-constant","resolution":"candidate","t":"call","to":"<root>/lib/util.sh"}
+{"col":9,"file":"<root>/main.sh","in":"deploy","line":10,"name":"build_release","reason":"string-eval","resolution":"candidate","t":"call","to":"<root>/lib/util.sh"}
+{"col":9,"file":"<root>/main.sh","in":"deploy","line":11,"name":"log","reason":"string-trap","resolution":"candidate","t":"call","to":"<root>/lib/util.sh"}
+{"col":1,"endCol":2,"endLine":16,"file":"<root>/main.sh","line":13,"name":"other","t":"func"}
+{"col":1,"endCol":2,"endLine":20,"file":"<root>/main.sh","line":17,"name":"unquoted","t":"func"}
+{"col":1,"file":"<root>/main.sh","line":21,"name":"deploy","reason":"direct","resolution":"resolved","t":"call","to":"<root>/main.sh"}
+{"col":1,"endCol":32,"endLine":2,"file":"<root>/orphan.sh","line":2,"name":"build_release","t":"func"}
+{"col":1,"file":"<root>/orphan.sh","line":3,"name":"build_release","reason":"direct","resolution":"resolved","t":"call","to":"<root>/orphan.sh"}
+{"col":1,"endCol":30,"endLine":2,"file":"<root>/plugins/a.sh","line":2,"name":"plugin_a","t":"func"}

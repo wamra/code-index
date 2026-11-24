@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf16"
+
+	"github.com/wamra/code-index/internal/extract"
 )
 
 func TestParseASTLinesFromRecordedSample(t *testing.T) {
@@ -17,11 +19,11 @@ func TestParseASTLinesFromRecordedSample(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	recs, skipped, err := parseASTLines(f)
+	recs, skipped, err := extract.ParseLines(f)
 	if err != nil || skipped != 0 || len(recs) != 18 {
 		t.Fatalf("recs=%d skipped=%d err=%v", len(recs), skipped, err)
 	}
-	by := map[string][]astRec{}
+	by := map[string][]extract.Record{}
 	for _, r := range recs {
 		by[r.T] = append(by[r.T], r)
 	}
@@ -50,7 +52,7 @@ func TestParseASTLinesFromRecordedSample(t *testing.T) {
 
 func TestParseASTLinesSkipsNoise(t *testing.T) {
 	in := "WARNING: something\n\n{\"t\":\"call\",\"name\":\"X\",\"file\":\"a.ps1\",\"line\":1,\"col\":1}\n{broken\n{\"nope\":1}\n"
-	recs, skipped, err := parseASTLines(strings.NewReader(in))
+	recs, skipped, err := extract.ParseLines(strings.NewReader(in))
 	if err != nil || len(recs) != 1 || skipped != 3 {
 		t.Fatalf("recs=%+v skipped=%d err=%v", recs, skipped, err)
 	}
@@ -102,7 +104,7 @@ Write-Output "h\u00e9llo \u00fcber"; Get-Accent
 	if err != nil {
 		t.Fatal(err)
 	}
-	recs, skipped, err := parseASTLines(strings.NewReader(string(out)))
+	recs, skipped, err := extract.ParseLines(strings.NewReader(string(out)))
 	if err != nil || skipped != 0 {
 		t.Fatalf("skipped=%d err=%v\n%s", skipped, err, out)
 	}

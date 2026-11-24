@@ -496,7 +496,19 @@ func nullIf(s string) any {
 	return s
 }
 
+// Values of symbols.source.
+const (
+	symSourceLSP     = "lsp"     // from a language server's documentSymbol
+	symSourceAST     = "ast"     // alias symbols made with the edges; deleteLangEdges removes them on every rebuild
+	symSourceExtract = "extract" // from the symbol/func records of an extractor
+)
+
 func writeFile(ctx context.Context, st *store.Store, c candidate, sha string, oldID int64, hasVec bool, syms []flatSym) (fileStats, error) {
+	return writeFileSource(ctx, st, c, sha, oldID, hasVec, syms, symSourceLSP)
+}
+
+// writeFileSource is writeFile with the symbols.source value to store.
+func writeFileSource(ctx context.Context, st *store.Store, c candidate, sha string, oldID int64, hasVec bool, syms []flatSym, source string) (fileStats, error) {
 	var fs fileStats
 	tx, err := st.DB().BeginTx(ctx, nil)
 	if err != nil {
@@ -515,11 +527,11 @@ func writeFile(ctx context.Context, st *store.Store, c candidate, sha string, ol
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO symbols(file_id, name, qualified_name, kind, parent_id,
 			start_line, start_col, end_line, end_col, sel_line, sel_col, signature, doc, body_sha256, source)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'lsp')`,
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			fileID, s.Name, s.Qualified, s.Kind, parent,
 			s.Range.Start.Line, s.Range.Start.Character, s.Range.End.Line, s.Range.End.Character,
 			s.SelectionRange.Start.Line, s.SelectionRange.Start.Character,
-			nullIf(s.Signature), nullIf(s.Doc), s.BodySHA)
+			nullIf(s.Signature), nullIf(s.Doc), s.BodySHA, source)
 		if err != nil {
 			return fs, err
 		}

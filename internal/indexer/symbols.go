@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/wamra/code-index/internal/lsp"
 )
@@ -97,7 +99,7 @@ func locateName(s *flatSym, lines []string) {
 	if c := s.Range.Start.Character; c > 0 {
 		from = byteIndexOfUTF16(line, c)
 	}
-	i := strings.Index(line[from:], s.Name)
+	i := indexWord(line[from:], s.Name)
 	if i < 0 {
 		return
 	}
@@ -107,6 +109,27 @@ func locateName(s *flatSym, lines []string) {
 	s.SelectionRange.Start.Character = start
 	s.SelectionRange.End.Line = s.Range.Start.Line
 	s.SelectionRange.End.Character = start + len(utf16.Encode([]rune(s.Name)))
+}
+
+// indexWord returns the byte index of the first occurrence of name in line
+// that is not part of a longer identifier ("f" in "function f" is the last
+// letter, not the first), else of the first occurrence at all, else -1.
+func indexWord(line, name string) int {
+	ident := func(r rune) bool { return r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r) }
+	for off := 0; name != "" && off <= len(line)-len(name); {
+		i := strings.Index(line[off:], name)
+		if i < 0 {
+			break
+		}
+		i += off
+		before, _ := utf8.DecodeLastRuneInString(line[:i])
+		after, _ := utf8.DecodeRuneInString(line[i+len(name):])
+		if (i == 0 || !ident(before)) && (i+len(name) == len(line) || !ident(after)) {
+			return i
+		}
+		off = i + 1
+	}
+	return strings.Index(line, name)
 }
 
 func byteIndexOfUTF16(line string, col int) int {

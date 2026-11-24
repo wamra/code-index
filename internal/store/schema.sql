@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS symbols (
   file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   qualified_name TEXT NOT NULL,
-  kind TEXT NOT NULL,             -- lowercase LSP SymbolKind name; 'alias' is reserved for milestone 2
+  kind TEXT NOT NULL,             -- lowercase LSP SymbolKind name, or 'alias'
   parent_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE,
   start_line INTEGER, start_col INTEGER,
   end_line INTEGER, end_col INTEGER,
@@ -28,23 +28,24 @@ CREATE TABLE IF NOT EXISTS symbols (
   signature TEXT,
   doc TEXT,
   body_sha256 TEXT,
-  source TEXT NOT NULL DEFAULT 'lsp'
+  source TEXT NOT NULL DEFAULT 'lsp'  -- lsp | ast (alias symbols, rebuilt with the edges) | extract (symbol records of an extractor)
 );
 CREATE INDEX IF NOT EXISTS symbols_file ON symbols(file_id);
 CREATE INDEX IF NOT EXISTS symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS symbols_qname ON symbols(qualified_name);
 
--- Milestone 2 fills edges; the table exists now so later milestones need no migration.
+-- Call-graph edges. A column added after the first release needs a migration in store.Open.
 CREATE TABLE IF NOT EXISTS edges (
   id INTEGER PRIMARY KEY,
   src_symbol_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE,
   dst_symbol_id INTEGER REFERENCES symbols(id) ON DELETE SET NULL,
   dst_name TEXT,
-  kind TEXT NOT NULL,             -- calls | references | alias_of | imports | dot_sources
+  kind TEXT NOT NULL,             -- calls | alias_of | imports | dot_sources | invokes
   file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
   line INTEGER, col INTEGER,
   source TEXT NOT NULL,           -- lsp | ast | lsp+ast
-  confidence TEXT NOT NULL        -- exact | alias | dynamic | unresolved
+  confidence TEXT NOT NULL,       -- exact | alias | candidate | dynamic | unresolved
+  reason TEXT                     -- why the extractor chose this edge (direct, alias, call-hierarchy, ...); NULL when it said nothing
 );
 CREATE INDEX IF NOT EXISTS edges_src ON edges(src_symbol_id);
 CREATE INDEX IF NOT EXISTS edges_dst ON edges(dst_symbol_id);

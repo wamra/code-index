@@ -33,7 +33,7 @@ type Embed struct {
 // Language is one language server entry; same shape as a Claude Code plugin's
 // .lsp.json entry plus the fields below.
 type Language struct {
-	Command string   `json:"command"`
+	Command string   `json:"command,omitempty"`
 	Args    []string `json:"args,omitempty"`
 	// Env adds environment variables for the server process (like .lsp.json "env").
 	Env             map[string]string `json:"env,omitempty"`
@@ -41,9 +41,12 @@ type Language struct {
 	LanguageID      string            `json:"language_id,omitempty"`
 	StartupTimeoutS int               `json:"startup_timeout_s,omitempty"`
 	RequestTimeoutS int               `json:"request_timeout_s,omitempty"`
-	// Extractor names an optional AST extractor run next to the language server
-	// ("powershell-ast": call graph, aliases and dynamic calls from the PowerShell parser).
-	Extractor string `json:"extractor,omitempty"`
+	// Extractor names the extractor(s) of the language: one name or an array
+	// of names, defined in Config.Extractors or built in ("powershell-ast": call
+	// graph, aliases and dynamic calls from the PowerShell parser). With the
+	// legacy Command field set, the language server is an implicit lsp
+	// extractor that runs first (docs/extractors.md).
+	Extractor ExtractorNames `json:"extractor,omitempty"`
 }
 
 // Index is the "index" section.
@@ -54,11 +57,12 @@ type Index struct {
 
 // Config is the contents of config.json.
 type Config struct {
-	Comment   string                   `json:"_comment,omitempty"`
-	Embed     Embed                    `json:"embed"`
-	Summarize provider.SummarizeConfig `json:"summarize"`
-	Languages map[string]Language      `json:"languages,omitempty"`
-	Index     Index                    `json:"index"`
+	Comment    string                   `json:"_comment,omitempty"`
+	Embed      Embed                    `json:"embed"`
+	Summarize  provider.SummarizeConfig `json:"summarize"`
+	Languages  map[string]Language      `json:"languages,omitempty"`
+	Extractors map[string]Extractor     `json:"extractors,omitempty"`
+	Index      Index                    `json:"index"`
 }
 
 // Path returns the config file path: $CODE_INDEX_CONFIG, else

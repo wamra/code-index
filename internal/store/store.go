@@ -106,11 +106,47 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	if _, err := db.Exec(`INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)`, strconv.Itoa(SchemaVersion)); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return &Store{db: db, path: path}, nil
+}
+
+// migrate brings a database created by an older release up to the current
+// schema. schema.sql only creates missing tables, so a column added to an
+// existing table is added here, when PRAGMA table_info does not list it.
+func migrate(db *sql.DB) error {
+	return addColumn(db, "edges", "reason", "TEXT")
+}
+
+// addColumn runs ALTER TABLE ... ADD COLUMN unless the table already has the column.
+func addColumn(db *sql.DB, table, column, typ string) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == column {
+			found = true
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || found {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + typ)
+	return err
 }
 
 // Close (WAL mode) folds the WAL into the main file (PRAGMA wal_checkpoint(TRUNCATE)) so

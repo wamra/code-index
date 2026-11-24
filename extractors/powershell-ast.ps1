@@ -10,7 +10,7 @@
 # line to stdout:
 #   func       function definition            name, line, col, endLine, endCol
 #   alias      alias definition               alias, target, line, col, endLine, endCol
-#   call       command invocation             name, in
+#   call       command invocation             name, resolution ("exact": a name only), in
 #   dynamic    call whose target is only known at run time   expr, in
 #   dotsource  . <path> statement              path (last string literal), expr, in
 #   import     Import-Module statement         path (name or path literal), expr, in
@@ -152,7 +152,7 @@ foreach ($path in [System.IO.File]::ReadAllLines($ListFile, $Utf8)) {
                 Emit ($base + @{ t = 'dynamic'; expr = (Clip "$name $arg") })
                 continue
             }
-            Emit ($base + @{ t = 'call'; name = $name })
+            Emit ($base + @{ t = 'call'; name = $name; resolution = 'exact' })
         }
     } catch {
         Emit @{ t = 'error'; file = $path; line = 1; col = 1; message = (Clip $_.Exception.Message) }

@@ -1,18 +1,18 @@
 {"t":"dotsource","file":"main.ps1","line":1,"col":3,"expr":"(Join-Path $PSScriptRoot 'lib.ps1')","in":"","path":"lib.ps1"}
-{"t":"call","file":"main.ps1","line":1,"col":4,"in":"","name":"Join-Path"}
-{"t":"call","file":"main.ps1","line":3,"col":10,"in":"","name":"Get-Widget"}
-{"t":"call","file":"main.ps1","line":4,"col":11,"in":"","name":"gw"}
-{"t":"call","file":"main.ps1","line":5,"col":1,"in":"","name":"Invoke-Helper"}
+{"t":"call","file":"main.ps1","line":1,"col":4,"in":"","name":"Join-Path","resolution":"exact"}
+{"t":"call","file":"main.ps1","line":3,"col":10,"in":"","name":"Get-Widget","resolution":"exact"}
+{"t":"call","file":"main.ps1","line":4,"col":11,"in":"","name":"gw","resolution":"exact"}
+{"t":"call","file":"main.ps1","line":5,"col":1,"in":"","name":"Invoke-Helper","resolution":"exact"}
 {"t":"dynamic","file":"main.ps1","line":9,"col":3,"expr":"& $cmd","in":""}
 {"t":"func","file":"lib.ps1","line":4,"col":1,"endCol":2,"endLine":12,"name":"Invoke-Helper"}
 {"t":"import","file":"lib.ps1","line":2,"col":1,"expr":"(Join-Path $PSScriptRoot 'Widgets/Widgets.psd1')","in":"","path":"Widgets/Widgets.psd1"}
-{"t":"call","file":"lib.ps1","line":2,"col":16,"in":"","name":"Join-Path"}
-{"t":"call","file":"lib.ps1","line":10,"col":10,"in":"Invoke-Helper","name":"Get-Widget"}
-{"t":"call","file":"lib.ps1","line":11,"col":5,"in":"Invoke-Helper","name":"Write-Output"}
+{"t":"call","file":"lib.ps1","line":2,"col":16,"in":"","name":"Join-Path","resolution":"exact"}
+{"t":"call","file":"lib.ps1","line":10,"col":10,"in":"Invoke-Helper","name":"Get-Widget","resolution":"exact"}
+{"t":"call","file":"lib.ps1","line":11,"col":5,"in":"Invoke-Helper","name":"Write-Output","resolution":"exact"}
 {"t":"func","file":"Widgets/Widgets.psm1","line":6,"col":1,"endCol":2,"endLine":16,"name":"Get-Widget"}
 {"t":"func","file":"Widgets/Widgets.psm1","line":18,"col":1,"endCol":2,"endLine":25,"name":"New-Widget"}
 {"t":"alias","file":"Widgets/Widgets.psm1","line":27,"col":17,"alias":"gw","endCol":19,"endLine":27,"in":"","target":"Get-Widget"}
-{"t":"call","file":"Widgets/Widgets.psm1","line":28,"col":1,"in":"","name":"Export-ModuleMember"}
+{"t":"call","file":"Widgets/Widgets.psm1","line":28,"col":1,"in":"","name":"Export-ModuleMember","resolution":"exact"}
 {"t":"parse_error","file":"bad.ps1","line":1,"col":1,"count":3,"first":"Missing ')' in function parameter list."}
 {"t":"func","file":"bad.ps1","line":2,"col":1,"endCol":1,"endLine":5,"name":"Broken-Thing"}
-{"t":"call","file":"bad.ps1","line":4,"col":5,"in":"Broken-Thing","name":"Write-Output"}
+{"t":"call","file":"bad.ps1","line":4,"col":5,"in":"Broken-Thing","name":"Write-Output","resolution":"exact"}
