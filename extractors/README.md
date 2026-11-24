@@ -520,11 +520,18 @@ each of `command_fallbacks` in order; none found means unavailable.
 
 ### Trust
 
-`<repo>/.Wammy/config.json` can define extractors, that is commands that `index`
-and `sweep` run in that repository, and a `version_argv` runs on every index run,
-even when nothing changed, to compute the cache key. As before extractors existed
-(a per-repo file could already set a language server command), only index
-repositories whose `.Wammy/config.json` you trust. There is no trust gate.
+An extractor is a command that `index` and `sweep` run in the repository, and a
+`version_argv` runs on every index run, even when nothing changed, to compute the
+cache key. So `<repo>/.Wammy/config.json`, which can arrive with a clone, cannot
+define them unless the central file trusts the repo: the repo file is read through
+an allowlist (language extensions, extractor names, `index`; no `extractors`, no
+language `command`/`args`/`env`, no `embed` or `summarize`) unless the matching
+`repos."<root>"` entry of the central file sets `trust_repo_config: true`. The
+same extractor definitions work, with full trust, directly in the central file's
+top level or in a `repos` entry (same schema). See the top-level README, "Per-repo
+configuration", for the merge order and the notes printed for dropped keys.
+Trusting a repo is still trusting its code: do it only for repositories you have
+read.
 
 ### 4.3 Placeholders in `argv`
 

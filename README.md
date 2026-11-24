@@ -139,20 +139,69 @@ Code plugin's `.lsp.json` entry), optionally with `"extractor": "powershell-ast"
   `CODE_INDEX_CPUPROFILE` (write a CPU profile of the run to this file; read it
   with `go tool pprof -top code-index FILE`).
 
-### Per-repo override
+### Per-repo configuration
 
-`<repo>/.Wammy/config.json` is merged over the global file section by section:
-`languages` and `extractors` per key; `embed`, `summarize` and `index` are replaced as
-whole sections when the repo file has them. `code-index config` prints the
-effective configuration with a `_sources` map naming the file each section came
-from (or `default`).
+Configuration can live in one file or several, all with the same schema. Three
+places are read, each decoded as the same `config` shape:
 
-**Trust.** `<repo>/.Wammy/config.json` can define extractors, that is commands that
-`index` and `sweep` run in that repository, and a `version_argv` runs on every
-index run, even when nothing changed, to compute the cache key. As before extractors
-existed (a per-repo file could already set a language server command), only index
-repositories whose `.Wammy/config.json` you trust. There is no trust gate
-(see `extractors/README.md`, section 4).
+1. the top level of the central file (`~/.config/code-index/config.json`, or
+   `CODE_INDEX_CONFIG`);
+2. a `repos` entry of the central file, keyed by the repo root path;
+3. `<repo>/.Wammy/config.json`.
+
+Merge order: built-in defaults, central top level, the matching `repos` entry,
+the repo's own file, environment. Each step merges section by section:
+`languages` per language key, `extractors` per extractor name, `embed`,
+`summarize` and `index` replaced as whole sections when the file has them. Any of
+the three places may be missing: central-only, repo-file-only and both work.
+
+```json
+{
+  "languages": { "go": { "extensions": [".go"], "extractor": "go-lsp" } },
+  "extractors": { "go-lsp": { "type": "lsp", "argv": ["gopls"] } },
+  "repos": {
+    "~/dev/shell-tools": {
+      "trust_repo_config": true,
+      "languages": { "bash": { "extensions": [".sh", ".bash"], "extractor": "wammybash" } },
+      "extractors": { "wammybash": { "type": "exec", "argv": ["wammybash", "extract", "--root", "{root}", "--list-file", "{listFile}"] } },
+      "index": { "ignore": ["vendor"] }
+    }
+  }
+}
+```
+
+A `repos` entry may set `languages`, `extractors`, `index`, `embed`, `summarize`
+and `trust_repo_config`, and is fully trusted (it is in your own file), so it may
+define commands. Keys are absolute paths or start with `~/`; they match the repo
+root by canonical path (symlinks resolved, so `/tmp/x` and `/private/tmp/x` are one
+directory; no globs). Two keys for one directory are an error. `repos` inside an
+entry, and `trust_repo_config` at the top level of the central file, are errors.
+
+`code-index config` prints the effective configuration for the current repo
+only, with a `_sources` map naming the file each section came from (`default`,
+a path, or `<central path>#repos.<key>`) and `_repo_config`, which says whether the
+repo's own file is trusted. Notes about ignored keys go to stderr (`index`,
+`sweep` and `config`).
+
+**Trust.** `<repo>/.Wammy/config.json` can arrive with a clone, so it may not make
+`index` and `sweep` run commands or send source to a host it picked (a
+`version_argv` runs on every index run, even when nothing changed). Unless the
+matching central `repos` entry sets `trust_repo_config: true`, the repo's file is
+read through an allowlist:
+
+- kept: `languages.<name>.extensions`, `languages.<name>.extractor` (names),
+  `language_id`, the timeouts, and `index`. For a language that exists in the
+  central file these overlay its entry field by field, so the central command
+  stays; a language that exists only in the repo file is made from these fields;
+- dropped, each with a note: `extractors.<name>`, `command`/`args`/`env` of a
+  language, `embed` and `summarize`.
+
+A name left pointing at an extractor defined nowhere is a validation error that
+carries the fix: define it in the central file under `repos."<root>"`, or set
+`repos."<root>".trust_repo_config` to true. `repos` and `trust_repo_config` in a
+repo's file are ignored with a note, so a repo cannot trust itself. With the
+repo trusted, its file behaves as before: it may define extractors and commands,
+so trust only repositories you have read (see `extractors/README.md`, section 4).
 
 ## Where the index lives
 
