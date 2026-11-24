@@ -273,13 +273,7 @@ func TestConfiguredVersion(t *testing.T) {
 	}
 }
 
-func TestFactoryStubsAndUnknownType(t *testing.T) {
-	for _, typ := range []string{config.ExtractorLSP} { // exec is implemented (exec_test.go)
-		_, err := New("lang", "x", config.Extractor{Type: typ, Argv: []string{"c"}})
-		if err == nil || !strings.Contains(err.Error(), "not implemented in this build") {
-			t.Errorf("%s: %v", typ, err)
-		}
-	}
+func TestFactoryUnknownType(t *testing.T) {
 	if _, err := New("lang", "x", config.Extractor{Type: "grpc"}); err == nil || !strings.Contains(err.Error(), `unknown type "grpc"`) {
 		t.Errorf("unknown type: %v", err)
 	}

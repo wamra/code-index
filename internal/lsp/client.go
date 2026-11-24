@@ -36,6 +36,7 @@ type Capabilities struct {
 	DocumentSymbol bool
 	Hover          bool
 	References     bool
+	CallHierarchy  bool
 }
 
 // Client talks to one language server process.
@@ -304,6 +305,7 @@ func (cl *Client) Initialize(ctx context.Context, root string) error {
 				"documentSymbol":  map[string]any{"hierarchicalDocumentSymbolSupport": true},
 				"hover":           map[string]any{"contentFormat": []string{"markdown", "plaintext"}},
 				"references":      map[string]any{},
+				"callHierarchy":   map[string]any{},
 			},
 		},
 	}
@@ -318,6 +320,7 @@ func (cl *Client) Initialize(ctx context.Context, root string) error {
 			DocumentSymbolProvider json.RawMessage `json:"documentSymbolProvider"`
 			HoverProvider          json.RawMessage `json:"hoverProvider"`
 			ReferencesProvider     json.RawMessage `json:"referencesProvider"`
+			CallHierarchyProvider  json.RawMessage `json:"callHierarchyProvider"`
 		} `json:"capabilities"`
 		ServerInfo struct {
 			Name    string `json:"name"`
@@ -331,6 +334,7 @@ func (cl *Client) Initialize(ctx context.Context, root string) error {
 		DocumentSymbol: provided(res.Capabilities.DocumentSymbolProvider),
 		Hover:          provided(res.Capabilities.HoverProvider),
 		References:     provided(res.Capabilities.ReferencesProvider),
+		CallHierarchy:  provided(res.Capabilities.CallHierarchyProvider),
 	}
 	cl.ServerName, cl.ServerVersion = res.ServerInfo.Name, res.ServerInfo.Version
 	return cl.Notify("initialized", map[string]any{})
@@ -430,6 +434,31 @@ func (cl *Client) References(ctx context.Context, uri string, pos Position) ([]L
 		out = append(out, it.Location)
 	}
 	return out, nil
+}
+
+// PrepareCallHierarchy requests textDocument/prepareCallHierarchy at pos: the
+// callables the server sees there (none for null).
+func (cl *Client) PrepareCallHierarchy(ctx context.Context, uri string, pos Position) ([]CallHierarchyItem, error) {
+	if !cl.caps.CallHierarchy {
+		return nil, fmt.Errorf("prepareCallHierarchy: %w", ErrNotAdvertised)
+	}
+	var items []CallHierarchyItem
+	err := cl.Call(ctx, "textDocument/prepareCallHierarchy", map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     pos,
+	}, &items)
+	return items, err
+}
+
+// IncomingCalls requests callHierarchy/incomingCalls for an item returned by
+// PrepareCallHierarchy.
+func (cl *Client) IncomingCalls(ctx context.Context, item CallHierarchyItem) ([]IncomingCall, error) {
+	if !cl.caps.CallHierarchy {
+		return nil, fmt.Errorf("incomingCalls: %w", ErrNotAdvertised)
+	}
+	var calls []IncomingCall
+	err := cl.Call(ctx, "callHierarchy/incomingCalls", map[string]any{"item": item}, &calls)
+	return calls, err
 }
 
 // Close shuts the server down: shutdown request, exit notification, then the

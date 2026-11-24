@@ -223,3 +223,23 @@ func ParseHover(text string) (signature, doc string) {
 	doc = strings.TrimSpace(strings.Join(kept, "\n"))
 	return signature, doc
 }
+
+// CallHierarchyItem is a callable the server knows, as answered by
+// textDocument/prepareCallHierarchy and carried inside incoming calls. Data is
+// opaque server state that must be sent back unchanged in callHierarchy/incomingCalls.
+type CallHierarchyItem struct {
+	Name           string          `json:"name"`
+	Kind           int             `json:"kind"`
+	Detail         string          `json:"detail,omitempty"`
+	URI            string          `json:"uri"`
+	Range          Range           `json:"range"`
+	SelectionRange Range           `json:"selectionRange"`
+	Data           json.RawMessage `json:"data,omitempty"`
+}
+
+// IncomingCall is one caller of a CallHierarchyItem. FromRanges are the call
+// sites, in the document of From (not of the callee).
+type IncomingCall struct {
+	From       CallHierarchyItem `json:"from"`
+	FromRanges []Range           `json:"fromRanges"`
+}
