@@ -12,12 +12,16 @@ import (
 	"testing"
 
 	"github.com/wamra/code-index/internal/embedtest"
+	"github.com/wamra/code-index/internal/extractest"
 	"github.com/wamra/code-index/internal/lsptest"
 )
 
 func TestMain(m *testing.M) {
 	if os.Getenv("CODE_INDEX_FAKE_LSP_SERVE") == "1" {
 		lsptest.Main()
+		return
+	}
+	if extractest.Main() {
 		return
 	}
 	os.Exit(m.Run())

@@ -319,3 +319,56 @@ func TestASTExtractorFailureKeepsIndexAndRetries(t *testing.T) {
 		t.Fatalf("retry: %+v", res)
 	}
 }
+
+// edgeReasons lists "file:line confidence reason" of the calls edges.
+func edgeReasons(t *testing.T, st *store.Store) string {
+	t.Helper()
+	rows, err := st.DB().Query(`SELECT f.path, e.line+1, e.confidence, COALESCE(e.reason,'') FROM edges e JOIN files f ON f.id=e.file_id WHERE e.kind='calls' ORDER BY f.path, e.line, e.col`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p, c, r string
+		var l int
+		if err := rows.Scan(&p, &l, &c, &r); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, fmt.Sprintf("%s:%d %s %s", p, l, c, r))
+	}
+	return strings.Join(out, "\n")
+}
+
+// A server with call hierarchy gives exact edges (reason call-hierarchy); one
+// with only references gives candidates (reason references).
+func TestCallHierarchyEdgesAreExactReferencesAreCandidates(t *testing.T) {
+	files := map[string]string{"a.ps1": srcA, "b.ps1": srcB}
+	root := tree(t, files)
+	hier := "a.ps1:2 exact call-hierarchy\nb.ps1:4 exact call-hierarchy\nb.ps1:5 exact call-hierarchy\nb.ps1:7 exact call-hierarchy"
+	st := openStore(t)
+	runOpts(t, st, fakeCfg("callhier", ".ps1"), indexer.Options{Root: root})
+	if got := edgeReasons(t, st); got != hier {
+		t.Errorf("call hierarchy:\n%s\nwant:\n%s", got, hier)
+	}
+	st2 := openStore(t)
+	runOpts(t, st2, fakeCfg("refs", ".ps1"), indexer.Options{Root: root})
+	if got := edgeReasons(t, st2); got != strings.ReplaceAll(strings.ReplaceAll(hier, "exact", "candidate"), "call-hierarchy", "references") {
+		t.Errorf("references:\n%s", got)
+	}
+}
+
+// A name-only exact edge from an exec extractor merges with the lsp candidate
+// at the same site into one lsp+ast exact row (the stronger confidence wins).
+func TestLSPCandidateAndNameOnlyASTMergeToExact(t *testing.T) {
+	root := copyTree(t, fixturePS)
+	st := openStore(t)
+	runOpts(t, st, astCfg("refs"), indexer.Options{Root: root, Extract: astSample(t, root)})
+	if got := scalar(t, st, `SELECT e.source || ' ' || e.confidence || ' [' || COALESCE(e.reason,'') || ']' FROM edges e JOIN files f ON f.id=e.file_id WHERE e.kind='calls' AND f.path='main.ps1' AND e.line=2`); got != "lsp+ast exact []" {
+		t.Errorf("merged row = %q", got)
+	}
+	// seen by the language server only: candidate with its reason
+	if got := scalar(t, st, `SELECT count(*) FROM edges WHERE source='lsp' AND confidence='candidate' AND reason='references'`); got == "0" {
+		t.Error("expected lsp-only candidate/references edges next to the merged ones")
+	}
+}
