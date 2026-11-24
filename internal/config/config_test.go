@@ -162,8 +162,18 @@ func TestDiscover(t *testing.T) {
 	if ps.Extractor != "powershell-ast" || got["bash"].Extractor != "" {
 		t.Errorf("extractors: powershell %q, bash %q", ps.Extractor, got["bash"].Extractor)
 	}
-	if b := Init(map[string]Language{"powershell": ps}); !strings.Contains(string(b), `"extractor": "powershell-ast"`) {
-		t.Errorf("config init must write the extractor:\n%s", b)
+	// config init writes the new shape: the language server is an lsp extractor and
+	// powershell-ast is listed (and defined) explicitly
+	b := Init(map[string]Language{"powershell": ps})
+	ic, _, err := Load(write(t, string(b)), env(nil))
+	if err != nil {
+		t.Fatalf("init output does not load: %v\n%s", err, b)
+	}
+	if got := ic.Languages["powershell"].Extractor.Names(); strings.Join(got, ",") != "powershell-lsp,powershell-ast" {
+		t.Errorf("config init must name the extractors, got %q\n%s", got, b)
+	}
+	if ic.Languages["powershell"].Command != "" || ic.Extractors["powershell-lsp"].Type != ExtractorLSP || ic.Extractors["powershell-ast"].Type != ExtractorExec {
+		t.Errorf("config init must write the new shape:\n%s", b)
 	}
 	// no pwsh script installed -> no powershell entry
 	if _, ok := Discover(t.TempDir(), look)["powershell"]; ok {

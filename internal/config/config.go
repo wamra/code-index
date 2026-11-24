@@ -115,15 +115,18 @@ func Load(path string, getenv func(string) string) (c Config, found bool, err er
 }
 
 // Sources says which file each section of a layered config came from:
-// keys "embed", "summarize", "index" and "languages.<name>"; the value is a
-// file path, or "default" when no file set it.
+// keys "embed", "summarize", "index", "languages.<name>" and
+// "extractors.<name>"; the value is a file path, or "default" when no file set
+// it ("built-in" for a built-in extractor in the effective config).
 type Sources map[string]string
 
 // RepoPath is the per-repo override file: <root>/.Wammy/config.json.
 func RepoPath(root string) string { return filepath.Join(root, ".Wammy", "config.json") }
 
 // LoadLayered reads the global file and the optional per-repo override and
-// merges them section by section: "languages" per language key, "embed",
+// merges them section by section: "languages" per language key, "extractors"
+// per extractor name (an entry replaces a built-in or earlier entry of the same
+// name as a whole), "embed",
 // "summarize" and "index" replaced as whole sections when the repo file has
 // them. Environment overrides apply last.
 func LoadLayered(globalPath, repoPath string, getenv func(string) string) (Config, Sources, error) {
@@ -132,7 +135,7 @@ func LoadLayered(globalPath, repoPath string, getenv func(string) string) (Confi
 	if err != nil {
 		return Config{}, nil, err
 	}
-	c := Config{Languages: map[string]Language{}}
+	c := Config{Languages: map[string]Language{}, Extractors: map[string]Extractor{}}
 	if gfound {
 		for _, sec := range []string{"embed", "summarize", "index"} {
 			if gsec[sec] {
@@ -143,6 +146,10 @@ func LoadLayered(globalPath, repoPath string, getenv func(string) string) (Confi
 		for n, l := range g.Languages {
 			c.Languages[n] = l
 			src["languages."+n] = globalPath
+		}
+		for n, e := range g.Extractors {
+			c.Extractors[n] = e
+			src["extractors."+n] = globalPath
 		}
 	}
 	if repoPath != "" {
@@ -163,6 +170,10 @@ func LoadLayered(globalPath, repoPath string, getenv func(string) string) (Confi
 			for n, l := range r.Languages {
 				c.Languages[n] = l
 				src["languages."+n] = repoPath
+			}
+			for n, e := range r.Extractors {
+				c.Extractors[n] = e
+				src["extractors."+n] = repoPath
 			}
 		}
 	}
@@ -195,7 +206,12 @@ func applyEnv(c *Config, getenv func(string) string) {
 // EmbedEnabled reports whether an embedder is configured and switched on.
 func (c Config) EmbedEnabled() bool { return c.Embed.Enabled != nil && *c.Embed.Enabled }
 
-// Resolved returns c with every default filled in.
+// Resolved returns c with every default filled in and the extractors
+// normalised (see resolveExtractors): a legacy language becomes an implicit lsp
+// extractor, defaults are filled per extractor type, and a new-style language
+// gets the legacy fields (Command, Args, ...) of its first lsp extractor so that
+// code that still reads them keeps working. Built-in extractors are not copied
+// into Extractors; they are found by name. Resolved is idempotent.
 func (c Config) Resolved() Config {
 	c.Embed.EmbedConfig = c.Embed.EmbedConfig.Resolved()
 	c.Summarize = c.Summarize.Resolved()
@@ -219,7 +235,7 @@ func (c Config) Resolved() Config {
 		langs[name] = l
 	}
 	c.Languages = langs
-	return c
+	return c.resolveExtractors()
 }
 
 // Validate checks a resolved config.
@@ -232,17 +248,17 @@ func (c Config) Validate() error {
 	if err := c.Summarize.Validate(); err != nil {
 		return err
 	}
+	if err := c.validateExtractors(); err != nil {
+		return err
+	}
 	seen := map[string]string{}
 	for _, name := range c.LanguageNames() {
 		l := c.Languages[name]
-		if l.Command == "" {
-			return fmt.Errorf("languages.%s.command is required", name)
-		}
-		if l.Extractor != "" && l.Extractor != "powershell-ast" {
-			return fmt.Errorf("languages.%s.extractor: unknown extractor %q (known: powershell-ast)", name, l.Extractor)
-		}
 		if len(l.Extensions) == 0 {
 			return fmt.Errorf("languages.%s.extensions is required", name)
+		}
+		if err := c.validateLanguageExtractors(name, l); err != nil {
+			return err
 		}
 		for _, e := range l.Extensions {
 			if !strings.HasPrefix(e, ".") {
@@ -312,19 +328,27 @@ type summarizeOut struct {
 	MaxInputChars  int     `json:"max_input_chars"`
 }
 
+// languageOut is a language as `config` and `config init` print it: the new
+// shape, with the extractors named and none of the legacy server fields.
+type languageOut struct {
+	Extensions []string       `json:"extensions"`
+	Extractor  ExtractorNames `json:"extractor"`
+}
+
 type out struct {
-	Comment   string              `json:"_comment,omitempty"`
-	Embed     embedOut            `json:"embed"`
-	Summarize summarizeOut        `json:"summarize"`
-	Languages map[string]Language `json:"languages"`
-	Index     Index               `json:"index"`
+	Comment    string                 `json:"_comment,omitempty"`
+	Embed      embedOut               `json:"embed"`
+	Summarize  summarizeOut           `json:"summarize"`
+	Languages  map[string]languageOut `json:"languages"`
+	Extractors map[string]Extractor   `json:"extractors"`
+	Index      Index                  `json:"index"`
 }
 
 func (c Config) out(comment string) out {
 	e, s := c.Embed, c.Summarize
-	o := out{Comment: comment, Languages: c.Languages, Index: c.Index}
-	if o.Languages == nil {
-		o.Languages = map[string]Language{}
+	o := out{Comment: comment, Index: c.Index, Languages: map[string]languageOut{}, Extractors: c.usedExtractors()}
+	for n, l := range c.Languages {
+		o.Languages[n] = languageOut{Extensions: l.Extensions, Extractor: l.Extractor}
 	}
 	o.Embed = embedOut{c.EmbedEnabled(), e.Provider, e.BaseURL, e.Model, e.Dims, e.DocPrefix, e.QueryPrefix, e.APIKeyEnv, e.Region, e.Profile, e.MaxItemsPerDay}
 	o.Summarize = summarizeOut{s.Provider, s.BaseURL, s.Model, s.APIKeyEnv, s.MaxTokens, *s.Temperature, *s.Enabled, s.MaxItemsPerRun,
@@ -346,13 +370,15 @@ func Effective(c Config, src Sources, getenv func(string) string) []byte {
 		}
 		return "unset"
 	}
+	o := r.out("")
+	src = effectiveSources(r, src, o.Extractors)
 	b, _ := json.MarshalIndent(struct {
 		Sources Sources `json:"_sources"`
 		out
 		EmbedKey     string `json:"_embed_api_key"`
 		SummarizeKey string `json:"_summarize_api_key"`
 		EmbedCap     string `json:"_embed_daily_cap"`
-	}{src, r.out(""), state(r.Embed.APIKeyEnv), state(r.Summarize.APIKeyEnv), capText(r.Embed.DailyCap)}, "", "  ")
+	}{src, o, state(r.Embed.APIKeyEnv), state(r.Summarize.APIKeyEnv), capText(r.Embed.DailyCap)}, "", "  ")
 	return append(b, '\n')
 }
 
@@ -365,7 +391,7 @@ func capText(f func() (int, string)) string {
 }
 
 // InitComment is the "_comment" of the file written by `config init`.
-const InitComment = "code-index configuration. embed: provider \"ollama\", \"openai\" (any OpenAI-compatible server) or \"bedrock\"; set enabled to true to build and use embeddings (without them everything works through full-text search). api_key_env is the NAME of an environment variable holding the API key, never the key itself. summarize is parsed but not used yet. languages: one entry per language server (same shape as a Claude Code plugin's .lsp.json entry); extensions must include the dot. index.ignore: path or glob patterns skipped in addition to .gitignore; index.max_file_size in bytes. Environment overrides: CODE_INDEX_CONFIG, CODE_INDEX_DB, CODE_INDEX_{EMBED,SUMMARIZE}_{PROVIDER,MODEL,BASE_URL}."
+const InitComment = "code-index configuration. embed: provider \"ollama\", \"openai\" (any OpenAI-compatible server) or \"bedrock\"; set enabled to true to build and use embeddings (without them everything works through full-text search). api_key_env is the NAME of an environment variable holding the API key, never the key itself. summarize is parsed but not used yet. languages: one entry per language, with its extensions (they must include the dot) and the extractor(s) that give its symbols and call edges, in run order. extractors: the definitions the languages name; type \"lsp\" is a language server (argv is the command line), type \"exec\" is a subprocess that prints JSON-lines records ({root}, {listFile} and {embedded:NAME} are replaced in argv); powershell-ast is built in. The older shape (a language with command, args, env) is still read. index.ignore: path or glob patterns skipped in addition to .gitignore; index.max_file_size in bytes. Environment overrides: CODE_INDEX_CONFIG, CODE_INDEX_DB, CODE_INDEX_{EMBED,SUMMARIZE}_{PROVIDER,MODEL,BASE_URL}."
 
 // KnownServers are the language server commands `config init` looks for on PATH.
 var KnownServers = []struct {
