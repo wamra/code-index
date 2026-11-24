@@ -35,6 +35,11 @@ One JSON object per line, UTF-8, `\n`-terminated. `extract.ParseLines` accepts a
 line when, after trimming, it starts with `{`, decodes into `extract.Record` and
 has a non-empty `t`. Any other line (a warning on stdout, for one) is counted and
 skipped; the indexer notes "ignored N non-JSON line(s) of extractor output".
+An exec extractor whose output has no record at all but at least one such line (a
+usage message, a panic) fails the run: the error names the extractor and quotes
+the first skipped line (truncated), so its files are marked failed and retried and
+the language's edges are not marked computed. Output with no line at all is a valid
+empty result, and output with records plus noise keeps the note.
 Lines up to 8 MiB are read. The Go type is `extract.Record`
 (`internal/extract/record.go`); constants `extract.Type*` name the record types.
 
@@ -182,6 +187,8 @@ One per language per run unless said otherwise. They are printed as
 | an exec command that is not installed | `<lang>: <error>; skipping the AST extractor <name>` |
 | an lsp server that cannot start, when no file needs indexing | `<lang>: no language server (<error>); LSP edges skipped` |
 | an lsp server without references and call hierarchy | `<lang>: extractor <name> does not advertise references or call hierarchy; no LSP edges` |
+| an extractor that cannot start for another reason than a missing command, when no file needs indexing | `<lang>: extractor <name>: <error>; skipped` |
+| the language's extractors cannot be started or built, when no file needs indexing | `<lang>: <error>; edges not computed` |
 | phase 2 failed | `<lang>: edges not computed: <error>` |
 
 ### 1.6 Merge of edges from several extractors (`edgeSet`)
@@ -365,6 +372,11 @@ Rules for a session:
   of code-index plus the entry's `env`, and `timeout_s` (error "timed out after
   Ns"; a caller cancel returns `ctx.Err()`). `{listFile}` is a temp file with one
   absolute path per line, each `\n`-terminated.
+- On unix the subprocess (and the `version_argv` command) is started in its own
+  process group and a timeout or cancel kills the whole group, so grandchildren do
+  not survive; a 2 s `WaitDelay` is the backstop for inherited pipes. **On Windows
+  only the direct child is killed**: a grandchild it started keeps running, and a
+  grandchild that holds the stdout pipe open can delay the return by that delay.
 - A non-zero exit returns `extractor "<name>": exit status N: <last 300 characters of stderr>`.
 - Records are matched to requested files by exact string, then cleaned path, then
   case-folded path (when unambiguous); `Record.File` is rewritten to the requested
@@ -494,6 +506,14 @@ Command resolution order (`extract.ResolveCommand`): if `command_env` names a
 non-empty variable, its value is the only command tried; otherwise `argv[0]`, then
 each of `command_fallbacks` in order; none found means unavailable.
 
+### Trust
+
+`<repo>/.Wammy/config.json` can define extractors, that is commands that `index`
+and `sweep` run in that repository, and a `version_argv` runs on every index run,
+even when nothing changed, to compute the cache key. As before extractors existed
+(a per-repo file could already set a language server command), only index
+repositories whose `.Wammy/config.json` you trust. There is no trust gate.
+
 ### 4.3 Placeholders in `argv`
 
 | placeholder | meaning |
@@ -552,7 +572,13 @@ language's run order, contributes:
 | `Name` | the extractor's config name |
 | `Type` | `exec` or `lsp` |
 | `Argv` | `extract.IdentityArgv(argv, root)`: the template with `{root}` replaced by the root, `{embedded:NAME}` replaced by `embedded:NAME@<8-hex content hash>` (nothing is written; editing the embedded script changes the key) and `{listFile}` left as literal text |
-| `Version` | `extract.ConfiguredVersion`: `version`, else the first line of `version_argv`, else `""` |
+| `Version` | `Extractor.Version(ctx)` of the built extractor: `version`, else the first line of `version_argv` (`extract.ConfiguredVersion`), else for an exec extractor the content hash of its first `{embedded:NAME}` script, else `""` |
+
+`extract.LangParts` builds the parts (`extract.New`, then `extract.PartOf`) and
+`indexer.langFingerprint` hashes them. An extractor that cannot be built or whose
+argv cannot be expanded (validation rejects both) gets a part whose version is
+"fingerprint unavailable: <error>", so the language is never marked up to date by
+such a part.
 
 The key does not cover `extensions`, `symbols`, `env` or the timeouts: after
 changing one, run `index --force`. Computing the fingerprint starts no language

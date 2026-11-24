@@ -147,6 +147,13 @@ whole sections when the repo file has them. `code-index config` prints the
 effective configuration with a `_sources` map naming the file each section came
 from (or `default`).
 
+**Trust.** `<repo>/.Wammy/config.json` can define extractors, that is commands that
+`index` and `sweep` run in that repository, and a `version_argv` runs on every
+index run, even when nothing changed, to compute the cache key. As before extractors
+existed (a per-repo file could already set a language server command), only index
+repositories whose `.Wammy/config.json` you trust. There is no trust gate
+(see `extractors/README.md`, section 4).
+
 ## Where the index lives
 
 Each repo has its own database at `<repo>/.Wammy/code.sqlite`. The repo root is
