@@ -80,6 +80,12 @@ func (r Record) IsSymbol() bool { return r.T == TypeSymbol || r.T == TypeFunc }
 // line whose known key has the wrong JSON type) are counted in skipped and
 // ignored. Unknown keys are ignored. Lines up to 8 MiB are read.
 func ParseLines(r io.Reader) (recs []Record, skipped int, err error) {
+	recs, skipped, _, err = parseLines(r)
+	return recs, skipped, err
+}
+
+// parseLines is ParseLines that also returns the first skipped line (trimmed).
+func parseLines(r io.Reader) (recs []Record, skipped int, firstSkipped string, err error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	for sc.Scan() {
@@ -89,10 +95,13 @@ func ParseLines(r io.Reader) (recs []Record, skipped int, err error) {
 		}
 		var rec Record
 		if line[0] != '{' || json.Unmarshal(line, &rec) != nil || rec.T == "" {
+			if skipped == 0 {
+				firstSkipped = string(line)
+			}
 			skipped++
 			continue
 		}
 		recs = append(recs, rec)
 	}
-	return recs, skipped, sc.Err()
+	return recs, skipped, firstSkipped, sc.Err()
 }

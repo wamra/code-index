@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -244,14 +245,30 @@ func (s *execSession) run(ctx context.Context, files []string) ([]Record, error)
 	if err != nil {
 		return nil, err
 	}
-	recs, skipped, err := ParseLines(bytes.NewReader(out))
+	recs, skipped, first, err := parseLines(bytes.NewReader(out))
 	if err != nil {
 		return nil, err
+	}
+	// Only noise, no record: the extractor did not speak the protocol (a usage
+	// message, a panic). Accepting it would store every file as empty and mark
+	// the language's edges computed, so nothing would be retried. No output at
+	// all stays valid: the extractor had nothing to say.
+	if len(files) > 0 && skipped > 0 && len(recs) == 0 {
+		return nil, fmt.Errorf("extractor %q printed no JSON record, only %d other line(s); first: %s", s.e.name, skipped, quoteLine(first))
 	}
 	if skipped > 0 {
 		s.notes = append(s.notes, fmt.Sprintf("ignored %d non-JSON line(s) of extractor output", skipped))
 	}
 	return recs, nil
+}
+
+// quoteLine quotes line for an error message, cut to 200 characters.
+func quoteLine(line string) string {
+	r := []rune(strings.ToValidUTF8(line, ""))
+	if len(r) > 200 {
+		return strconv.Quote(string(r[:200])) + "..."
+	}
+	return strconv.Quote(string(r))
 }
 
 func (s *execSession) subprocess(ctx context.Context, files []string) ([]byte, error) {

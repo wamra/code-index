@@ -26,6 +26,14 @@ func helperMain() {
 		time.Sleep(time.Minute)
 		return
 	}
+	if mode == "garbage" { // a usage message on stdout, exit 0
+		fmt.Println("usage: extractor [-h] --list FILE")
+		fmt.Println("second line")
+		return
+	}
+	if mode == "silent" { // nothing at all, exit 0
+		return
+	}
 	list := ""
 	for i, a := range args {
 		if a == "--list" && i+1 < len(args) {
@@ -364,4 +372,66 @@ func TestResolveCommandInExpandsRoot(t *testing.T) {
 	if _, err := ResolveCommandIn(ec, root, func(string) string { return "" }, look); !errors.Is(err, ErrExtractorUnavailable) {
 		t.Errorf("missing: %v", err)
 	}
+}
+
+// Output made only of non-JSON lines is a failed run, not an empty result:
+// otherwise every requested file would be stored with no symbols and never retried.
+func TestExecGarbageOnlyOutputIsAnError(t *testing.T) {
+	root := t.TempDir()
+	files := []string{filepath.Join(root, "a.x")}
+	check := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("garbage-only output must be an error")
+		}
+		for _, want := range []string{`"fake"`, "usage: extractor [-h] --list FILE", "no JSON"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q lacks %q", err, want)
+			}
+		}
+		if strings.Contains(err.Error(), "second line") {
+			t.Errorf("only the first skipped line is quoted: %q", err)
+		}
+	}
+	t.Run("subprocess", func(t *testing.T) {
+		g, _, err := runEdges(t, helperEC("garbage"), Env{Root: root}, files)
+		check(t, err)
+		if len(g) != 0 {
+			t.Errorf("nothing may be emitted: %v", g)
+		}
+	})
+	t.Run("seam", func(t *testing.T) {
+		seam := func(context.Context, string, []string) ([]byte, error) {
+			return []byte("usage: extractor [-h] --list FILE\nsecond line\n"), nil
+		}
+		_, _, err := runEdges(t, helperEC("garbage"), Env{Root: root, Exec: seam}, files)
+		check(t, err)
+	})
+	t.Run("long line is truncated", func(t *testing.T) {
+		seam := func(context.Context, string, []string) ([]byte, error) {
+			return []byte(strings.Repeat("z", 5000) + "\n"), nil
+		}
+		_, _, err := runEdges(t, helperEC("garbage"), Env{Root: root, Exec: seam}, files)
+		if err == nil || len(err.Error()) > 600 {
+			t.Errorf("err = %v", err)
+		}
+	})
+	t.Run("no output at all stays valid", func(t *testing.T) {
+		g, _, err := runEdges(t, helperEC("silent"), Env{Root: root}, files)
+		if err != nil || len(g) != 1 || len(g[files[0]]) != 0 {
+			t.Errorf("g=%v err=%v", g, err)
+		}
+	})
+	t.Run("blank lines only stay valid", func(t *testing.T) {
+		seam := func(context.Context, string, []string) ([]byte, error) { return []byte("\n  \n"), nil }
+		if _, _, err := runEdges(t, helperEC("silent"), Env{Root: root, Exec: seam}, files); err != nil {
+			t.Error(err)
+		}
+	})
+	t.Run("mixed output keeps the note", func(t *testing.T) {
+		g, s, err := runEdges(t, helperEC("noise"), Env{Root: root}, files)
+		if err != nil || len(g[files[0]]) != 1 || len(s.(Noter).Notes()) != 1 {
+			t.Errorf("g=%v err=%v", g, err)
+		}
+	})
 }
