@@ -8,3 +8,11 @@ package extract
 type Noter interface {
 	Notes() []string
 }
+
+// Describer is an optional interface of a Session: Describe returns what the
+// run log shows after the language name when the session is ready, such as a
+// language server's name and version. Sessions without it show the extractor's
+// name.
+type Describer interface {
+	Describe() string
+}

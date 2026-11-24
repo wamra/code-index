@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/wamra/code-index/internal/config"
@@ -53,7 +54,7 @@ func (e *lspExtractor) Start(ctx context.Context, env Env) (Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("extractor %q: %w", e.name, err)
 	}
-	command, err := ResolveCommand(e.ec, os.Getenv, exec.LookPath)
+	command, err := ResolveCommandIn(e.ec, env.Root, os.Getenv, exec.LookPath)
 	if err != nil && env.OpenLSP == nil {
 		return nil, err // wraps ErrExtractorUnavailable
 	}
@@ -121,6 +122,15 @@ func (s *lspSession) Provides() Provides {
 		Symbols: s.caps.DocumentSymbol,
 		Edges:   s.caps.CallHierarchy || s.caps.References,
 	}
+}
+
+// Describe implements Describer: the server's name and version.
+func (s *lspSession) Describe() string {
+	d := strings.TrimSpace(s.cl.ServerName + " " + s.cl.ServerVersion)
+	if d == "" {
+		return "server"
+	}
+	return d
 }
 
 // Close shuts the server down.

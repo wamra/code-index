@@ -87,13 +87,28 @@ func ResolveCommand(ec config.Extractor, getenv func(string) string, lookPath fu
 	return "", fmt.Errorf("%w: none of %s is on PATH", ErrExtractorUnavailable, strings.Join(quoted, ", "))
 }
 
+// ResolveCommandIn is ResolveCommand with {root} replaced by root in argv[0]
+// and in the fallbacks first, so "{root}/tools/extract" resolves.
+func ResolveCommandIn(ec config.Extractor, root string, getenv func(string) string, lookPath func(string) (string, error)) (string, error) {
+	ec.Argv = append([]string(nil), ec.Argv...)
+	if len(ec.Argv) > 0 {
+		ec.Argv[0] = strings.ReplaceAll(ec.Argv[0], PlaceholderRoot, root)
+	}
+	fb := make([]string, len(ec.CommandFallbacks))
+	for i, c := range ec.CommandFallbacks {
+		fb[i] = strings.ReplaceAll(c, PlaceholderRoot, root)
+	}
+	ec.CommandFallbacks = fb
+	return ResolveCommand(ec, getenv, lookPath)
+}
+
 // Start opens a session. With env.Exec set the subprocess is replaced, so the
 // command is not resolved; otherwise a missing command is an error wrapping
 // ErrExtractorUnavailable.
 func (e *execExtractor) Start(ctx context.Context, env Env) (Session, error) {
 	s := &execSession{e: e, env: env, cache: map[string][]Record{}}
 	if env.Exec == nil {
-		cmd, err := ResolveCommand(e.ec, os.Getenv, exec.LookPath)
+		cmd, err := ResolveCommandIn(e.ec, env.Root, os.Getenv, exec.LookPath)
 		if err != nil {
 			return nil, err
 		}

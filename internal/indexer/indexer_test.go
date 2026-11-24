@@ -373,3 +373,16 @@ func TestCRLFAndBOMSourcesIndexLikeLF(t *testing.T) {
 		}
 	}
 }
+
+// A language whose server cannot start reports the language error only: no
+// extra note about the server.
+func TestMissingServerGivesNoExtraNote(t *testing.T) {
+	root := tree(t, map[string]string{"a.ps1": "function A {\n}\n"})
+	cfg := config.Config{Languages: map[string]config.Language{
+		"fake": {Command: "/nonexistent/language-server", Extensions: []string{".ps1"}},
+	}}.Resolved()
+	res := run(t, openStore(t), cfg, root, false)
+	if len(res.Notes) != 0 || res.LangErrors["fake"] == "" {
+		t.Errorf("notes = %v, lang errors = %v", res.Notes, res.LangErrors)
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wamra/code-index/internal/config"
+	"github.com/wamra/code-index/internal/extract"
 	"github.com/wamra/code-index/internal/filelock"
 	"github.com/wamra/code-index/internal/lsp"
 	"github.com/wamra/code-index/internal/store"
@@ -239,7 +240,9 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 		items := byLang[lang]
 		lc := cfg.Languages[lang]
 		live, notes, serr := startSessions(ctx, o, root, lang, cfg.ExtractorsFor(lang), len(items) > 0, edgeLangs[lang])
-		res.Notes = append(res.Notes, notes...)
+		if serr == nil || len(items) == 0 {
+			res.Notes = append(res.Notes, notes...) // when the language fails, its error says it all
+		}
 		if serr != nil {
 			closeSessions(live)
 			if ctx.Err() != nil {
@@ -257,7 +260,11 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 		}
 		if len(items) > 0 {
 			sym := symbolSession(live)
-			o.logf("%s: %s ready, indexing %d file(s)", lang, sym.ne.Name, len(items))
+			what := sym.ne.Name
+			if d, ok := sym.sess.(extract.Describer); ok {
+				what = d.Describe()
+			}
+			o.logf("%s: %s ready, indexing %d file(s)", lang, what, len(items))
 			indexItems(ctx, st, o, lang, sym, items, existing, hasVec, &res)
 		}
 		complete := ctx.Err() == nil && res.LangErrors[lang] == ""

@@ -346,3 +346,22 @@ func TestConfigPlaceholderCheckMatchesExtract(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveCommandInExpandsRoot(t *testing.T) {
+	root := t.TempDir()
+	want := root + "/tools/extract"
+	look := func(c string) (string, error) {
+		if c == want {
+			return c, nil
+		}
+		return "", errors.New("not found")
+	}
+	ec := config.Extractor{Type: config.ExtractorExec, Argv: []string{"{root}/tools/extract", "{listFile}"}}
+	if got, err := ResolveCommandIn(ec, root, func(string) string { return "" }, look); err != nil || got != want {
+		t.Errorf("= %q, %v", got, err)
+	}
+	ec.Argv[0] = "{root}/missing"
+	if _, err := ResolveCommandIn(ec, root, func(string) string { return "" }, look); !errors.Is(err, ErrExtractorUnavailable) {
+		t.Errorf("missing: %v", err)
+	}
+}

@@ -123,7 +123,7 @@ func cmdDoctor(args []string, out, errw io.Writer) int {
 	if *noIndex {
 		if cerr == nil {
 			for _, name := range cfg.LanguageNames() {
-				level, detail := languageCheck(cfg, name)
+				level, detail := languageCheck(cfg, cwdRoot(), name)
 				add(level, "language "+name, "%s", detail)
 			}
 			if !cfg.EmbedEnabled() {
@@ -197,7 +197,7 @@ func cmdDoctor(args []string, out, errw io.Writer) int {
 			rows.Close()
 		}
 		for _, name := range cfg.LanguageNames() {
-			level, detail := languageCheck(cfg, name)
+			level, detail := languageCheck(cfg, root, name)
 			add(level, "language "+name, "%s (%d file(s) indexed)", detail, used[name])
 		}
 	}
@@ -303,10 +303,10 @@ func joinKeys(m map[string]bool) string {
 // (command_env, argv[0], command_fallbacks, as the indexer resolves them). It
 // returns "ok" with "name (type): path" for each, or "WARN" naming the
 // extractors whose command is missing.
-func languageCheck(cfg config.Config, lang string) (level, detail string) {
+func languageCheck(cfg config.Config, root, lang string) (level, detail string) {
 	var found, missing []string
 	for _, ne := range cfg.ExtractorsFor(lang) {
-		p, err := extract.ResolveCommand(ne.Extractor, os.Getenv, exec.LookPath)
+		p, err := extract.ResolveCommandIn(ne.Extractor, root, os.Getenv, exec.LookPath)
 		if err != nil {
 			missing = append(missing, fmt.Sprintf("%s (%s): %v", ne.Name, ne.Type, err))
 			continue

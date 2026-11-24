@@ -413,8 +413,9 @@ runs gopls when `CODE_INDEX_REAL_LSP=gopls`.
 ### 3.6 Writing an exec extractor
 
 Any program that reads a list of absolute paths and prints one JSON object per
-line works. This is a complete one (shell, 15 lines) that gives every `name()`
-function of a file as a symbol and every call to one as an exact edge:
+line works. This one (shell, 9 lines; run once through `index`, it stored the
+two functions of a test file as symbols) prints a `func` record for every
+`name()` line of every listed file:
 
 ```sh
 #!/bin/sh
@@ -429,8 +430,8 @@ done < "$4"
 
 Configure it with `"extractors": {"mine": {"type": "exec", "argv": ["/path/extract.sh",
 "--root", "{root}", "--list-file", "{listFile}"], "symbols": true}}` and name it in
-a language. Add `call` records (`file`, `line`, `col`, `name`, `resolution`, and
-`to` when you know the file) for edges, `error` records for files you cannot
+a language. It gives symbols only. Add `call` records (`file`, `line`, `col`,
+`name`, `resolution`, and `to` when you know the file) for edges, `error` records for files you cannot
 read, and a `version_argv` so a new version of your tool re-indexes.
 
 ## 4. Config schema
@@ -568,8 +569,9 @@ A fully stale language **keeps its old marker when its run does not complete**
 (a server that cannot start, a cancellation, a dead server, a failed phase), so
 the next run finds it stale again and re-indexes the files this run did not reach.
 Under `--no-edges` the marker becomes `""` only after the re-index finished. A
-language that is up to date and has no changed file starts nothing: no server, no
-subprocess (a second `index` run takes milliseconds).
+language that is up to date and has no changed file starts no language server and
+runs no extractor; only a `version_argv` command, when one is configured, runs
+(a second `index` run takes milliseconds).
 
 ## 6. Storage and output
 
