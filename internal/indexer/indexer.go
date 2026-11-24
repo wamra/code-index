@@ -119,6 +119,32 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 		hasVec = true
 	}
 
+	// Cache key of each language's edges (docs/extractors.md section 5). The
+	// stored value is "" (edges only), the current fingerprint (up to date) or
+	// anything else (an older fingerprint or the legacy "1"): the language is
+	// fully stale and all its files are re-indexed.
+	fpMemo := map[string]string{}
+	fingerprint := func(lang string) string {
+		if _, ok := fpMemo[lang]; !ok {
+			fpMemo[lang] = langFingerprint(ctx, cfg, lang, root)
+		}
+		return fpMemo[lang]
+	}
+	candLangs := map[string]bool{}
+	for _, c := range cands {
+		candLangs[c.lang] = true
+	}
+	storedEdges := map[string]string{}
+	fullStale := map[string]bool{}
+	for l := range candLangs {
+		stored, err := st.Meta(ctx, edgesMetaKey(l))
+		if err != nil {
+			return res, err
+		}
+		storedEdges[l] = stored
+		fullStale[l] = stored != "" && stored != fingerprint(l)
+	}
+
 	// Decide per file: unchanged, or needs indexing.
 	type work struct {
 		c    candidate
@@ -130,7 +156,8 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 	for _, c := range cands {
 		seen[c.rel] = true
 		row, known := existing[c.rel]
-		if known && !o.Force && row.status == "ok" && row.lang == c.lang && row.size == c.size && row.mtime == c.mtime {
+		reindex := o.Force || fullStale[c.lang]
+		if known && !reindex && row.status == "ok" && row.lang == c.lang && row.size == c.size && row.mtime == c.mtime {
 			res.Unchanged++
 			continue
 		}
@@ -145,7 +172,7 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 			continue
 		}
 		sha := sha256Hex(data)
-		if known && !o.Force && row.status == "ok" && row.lang == c.lang && row.sha == sha {
+		if known && !reindex && row.status == "ok" && row.lang == c.lang && row.sha == sha {
 			if _, err := st.DB().ExecContext(ctx, `UPDATE files SET mtime=?, size=? WHERE id=?`, c.mtime, c.size, row.id); err != nil {
 				return res, err
 			}
@@ -172,10 +199,6 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 	// deleted files, every language on --force, and a language whose edges
 	// were never computed (or were left stale by a --no-edges run).
 	edgeLangs := map[string]bool{}
-	candLangs := map[string]bool{}
-	for _, c := range cands {
-		candLangs[c.lang] = true
-	}
 	for l := range byLang {
 		edgeLangs[l] = true
 	}
@@ -183,13 +206,14 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 		edgeLangs[l] = true
 	}
 	for l := range candLangs {
-		if done, _ := st.Meta(ctx, edgesMetaKey(l)); o.Force || done != "1" {
+		if o.Force || storedEdges[l] != fingerprint(l) {
 			edgeLangs[l] = true
 		}
 	}
 	for l := range edgeLangs {
 		if _, ok := cfg.Languages[l]; !ok || o.NoEdges {
-			if o.NoEdges && (len(byLang[l]) > 0 || deletedLangs[l] || o.Force) {
+			// A fully stale language is marked after its files are re-indexed (below).
+			if o.NoEdges && !fullStale[l] && (len(byLang[l]) > 0 || deletedLangs[l] || o.Force) {
 				_ = st.SetMeta(ctx, edgesMetaKey(l), "") // stale now: recompute on the next run
 			}
 			delete(edgeLangs, l)
@@ -208,6 +232,14 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 		langs = append(langs, l)
 	}
 	sort.Strings(langs)
+	// edgesNotDone marks a language whose edges were not computed. A fully stale
+	// language keeps its old value, so the next run still finds it stale and
+	// re-indexes the files this run did not reach.
+	edgesNotDone := func(lang string) {
+		if !fullStale[lang] {
+			_ = st.SetMeta(ctx, edgesMetaKey(lang), "")
+		}
+	}
 	edgesRan := false
 	for _, lang := range langs {
 		items := byLang[lang]
@@ -218,7 +250,7 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 				res.LangErrors[lang] = err.Error()
 				res.Failed += len(items)
 				o.logf("%s: %d file(s) not indexed: %v", lang, len(items), err)
-				_ = st.SetMeta(ctx, edgesMetaKey(lang), "")
+				edgesNotDone(lang)
 				continue
 			}
 			// nothing to re-index: still build the edges the AST extractor can give
@@ -251,21 +283,25 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 			res.Chunks += fs.chunks
 			o.logf("  %s: %d symbol(s)", w.c.rel, fs.symbols)
 		}
-		if edgeLangs[lang] && ctx.Err() == nil && res.LangErrors[lang] == "" {
+		complete := ctx.Err() == nil && res.LangErrors[lang] == ""
+		if edgeLangs[lang] && complete {
 			es, err := computeEdges(ctx, st, o, root, lang, lc, cl)
 			res.Notes = append(res.Notes, es.Notes...)
 			if err != nil {
 				res.Notes = append(res.Notes, fmt.Sprintf("%s: edges not computed: %v", lang, err))
-				_ = st.SetMeta(ctx, edgesMetaKey(lang), "")
+				_ = st.SetMeta(ctx, edgesMetaKey(lang), "") // the files of this run are current: edges only next time
 			} else {
 				res.Edges += es.Edges
 				res.Aliases += es.Aliases
 				res.EdgeLangs++
 				edgesRan = true
 				o.logf("  %s: %d edge(s), %d alias(es)", lang, es.Edges, es.Aliases)
-				_ = st.SetMeta(ctx, edgesMetaKey(lang), "1")
+				_ = st.SetMeta(ctx, edgesMetaKey(lang), fingerprint(lang))
 			}
 		} else if edgeLangs[lang] {
+			edgesNotDone(lang)
+		} else if o.NoEdges && fullStale[lang] && complete {
+			// --no-edges re-indexed a stale language: the next run rebuilds its edges only.
 			_ = st.SetMeta(ctx, edgesMetaKey(lang), "")
 		}
 		if cl != nil {
