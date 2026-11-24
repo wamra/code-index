@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -194,18 +195,21 @@ func TestPlaceholdersAndExpandArgv(t *testing.T) {
 	if got := Placeholders("--root={root}/x {listFile} {embedded:a.ps1} { } {nope} lone { brace"); strings.Join(got, "|") != "{root}|{listFile}|{embedded:a.ps1}|{ }|{nope}" {
 		t.Errorf("placeholders = %q", got)
 	}
-	for tok, want := range map[string]bool{"{root}": true, "{listFile}": true, "{embedded:powershell-ast.ps1}": true, "{embedded:nope.ps1}": false, "{embedded:}": false, "{x}": false} {
-		if IsKnownPlaceholder(tok) != want {
-			t.Errorf("IsKnownPlaceholder(%s) = %v", tok, !want)
-		}
-	}
 	v := Vars{Root: "/w", ListFile: "/tmp/l.txt", Embedded: func(n string) (string, error) { return "/cache/" + n, nil }}
 	got, err := ExpandArgv([]string{"tool", "--root", "{root}", "--root={root}/sub", "-File", "{embedded:s.ps1}", "{listFile}"}, v)
 	if err != nil || strings.Join(got, " ") != "tool --root /w --root=/w/sub -File /cache/s.ps1 /tmp/l.txt" {
 		t.Errorf("expand = %q err=%v", got, err)
 	}
-	if _, err := ExpandArgv([]string{"x", "{bogus}"}, v); err == nil || !strings.Contains(err.Error(), "{bogus}") {
-		t.Errorf("unknown placeholder: %v", err)
+	// any other brace group is literal text, in expansion and in the identity
+	lit := []string{"sh", "-c", "awk '{print $1}'", "cat", "{}", "{bogus}", `--config={"a":{"b":1}}`}
+	if got, err := ExpandArgv(lit, v); err != nil || !reflect.DeepEqual(got, lit) {
+		t.Errorf("literal braces: %q err=%v", got, err)
+	}
+	if got, err := IdentityArgv(lit, "/w"); err != nil || !reflect.DeepEqual(got, lit) {
+		t.Errorf("identity of literal braces: %q err=%v", got, err)
+	}
+	if _, err := ExpandArgv([]string{"{embedded:nope.ps1}"}, Vars{Root: "/w"}); err == nil {
+		t.Error("a missing embedded file must be an error")
 	}
 	if _, err := ExpandArgv([]string{"{listFile}"}, Vars{Root: "/w"}); err == nil {
 		t.Error("{listFile} without a list file must be an error")

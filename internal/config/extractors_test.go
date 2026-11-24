@@ -178,3 +178,25 @@ func TestValidateExtractorHoles(t *testing.T) {
 		t.Errorf("new style resolved twice: %v", err)
 	}
 }
+
+// The legacy language shape with a JSON argument in args loads, validates and
+// keeps the argument as written (a brace group that is not a placeholder).
+func TestLegacyCommandWithBracesInArgs(t *testing.T) {
+	const doc = `{"languages":{"go":{"command":"gopls","args":["-remote=auto","--config={\"a\":1}"],"extensions":[".go"]}}}`
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err := Load(path, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := c.Resolved()
+	if err := r.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	nes := r.ExtractorsFor("go")
+	if len(nes) != 1 || !reflect.DeepEqual(nes[0].Argv, []string{"gopls", "-remote=auto", `--config={"a":1}`}) {
+		t.Errorf("extractors = %+v", nes)
+	}
+}

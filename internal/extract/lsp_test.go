@@ -506,12 +506,24 @@ func TestLSPStartUsesOpenLSPWithExpandedSpec(t *testing.T) {
 	}
 }
 
-func TestLSPStartRejectsAnUnknownPlaceholder(t *testing.T) {
+// Braces that are not a known placeholder are literal: a JSON argument reaches
+// the server unchanged.
+func TestLSPStartPassesLiteralBracesThrough(t *testing.T) {
+	root, _ := writeTree(t, nil)
 	ec := fakeEntry("")
-	ec.Argv = append(ec.Argv, "{nope}")
+	ec.Argv = append(ec.Argv, `--config={"a":1}`, "{nope}", "{}", "--root={root}")
 	ex, _ := New("fake", "x", ec)
-	if _, err := ex.Start(context.Background(), Env{Root: t.TempDir()}); err == nil || errors.Is(err, ErrExtractorUnavailable) {
-		t.Errorf("err = %v", err)
+	var got lsp.Spec
+	s, err := ex.Start(context.Background(), Env{Root: root, OpenLSP: func(sp lsp.Spec) (*lsp.Client, error) {
+		got = sp
+		return lsp.Start(sp)
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if want := []string{"-test.run=^$", `--config={"a":1}`, "{nope}", "{}", "--root=" + root}; !reflect.DeepEqual(got.Args, want) {
+		t.Errorf("args = %q, want %q", got.Args, want)
 	}
 }
 

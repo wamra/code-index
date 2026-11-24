@@ -360,15 +360,6 @@ func TestGroupByFileTolerantMatching(t *testing.T) {
 	}
 }
 
-// config.KnownPlaceholder mirrors IsKnownPlaceholder (config cannot import this package).
-func TestConfigPlaceholderCheckMatchesExtract(t *testing.T) {
-	for _, tok := range []string{"{root}", "{listFile}", "{embedded:powershell-ast.ps1}", "{embedded:nope.ps1}", "{embedded:}", "{x}", "{}", "{ROOT}"} {
-		if IsKnownPlaceholder(tok) != config.KnownPlaceholder(tok) {
-			t.Errorf("%s: extract=%v config=%v", tok, IsKnownPlaceholder(tok), config.KnownPlaceholder(tok))
-		}
-	}
-}
-
 func TestResolveCommandInExpandsRoot(t *testing.T) {
 	root := t.TempDir()
 	want := root + "/tools/extract"
@@ -448,4 +439,25 @@ func TestExecGarbageOnlyOutputIsAnError(t *testing.T) {
 			t.Errorf("g=%v err=%v", g, err)
 		}
 	})
+}
+
+// An argument with braces that is not a known placeholder reaches the
+// subprocess as it is.
+func TestExecLiteralBracesReachTheSubprocess(t *testing.T) {
+	root := t.TempDir()
+	ec := helperEC("dump", "awk '{print $1}'", "{}", "{nope}")
+	ex, _ := New("lang", "fake", ec)
+	s, err := ex.Start(context.Background(), Env{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var recs []Record
+	err = s.Edges(context.Background(), []string{"dump"}, nil, func(_ string, rs []Record) error { recs = rs; return nil })
+	if err != nil || len(recs) == 0 {
+		t.Fatalf("recs=%v err=%v", recs, err)
+	}
+	if !strings.HasSuffix(recs[0].In, "|awk '{print $1}'|{}|{nope}") {
+		t.Errorf("args = %q", recs[0].In)
+	}
 }

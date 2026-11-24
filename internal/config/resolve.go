@@ -165,24 +165,24 @@ var (
 	placeholderRe   = regexp.MustCompile(`\{[^{}]*\}`)
 )
 
-// knownPlaceholder mirrors extract.IsKnownPlaceholder (internal/extract imports
-// this package, so it cannot be called from here); a test in internal/extract
-// keeps the two equal.
-func knownPlaceholder(tok string) bool {
-	switch tok {
-	case "{root}", "{listFile}":
-		return true
-	}
+// embeddedPlaceholder returns NAME of an "{embedded:NAME}" token.
+func embeddedPlaceholder(tok string) (string, bool) {
 	if strings.HasPrefix(tok, "{embedded:") && strings.HasSuffix(tok, "}") {
-		_, found := extractors.Embedded(tok[len("{embedded:") : len(tok)-1])
-		return found
+		return tok[len("{embedded:") : len(tok)-1], true
 	}
-	return false
+	return "", false
 }
 
-// KnownPlaceholder reports whether tok ("{root}", "{listFile}" or
-// "{embedded:NAME}" with an existing embedded file) is a placeholder argv may use.
-func KnownPlaceholder(tok string) bool { return knownPlaceholder(tok) }
+// specialPlaceholder reports whether tok is one of the placeholders argv
+// expands: {root}, {listFile} or {embedded:NAME}. Any other "{...}" text is
+// literal (a JSON argument, an awk program, "{}").
+func specialPlaceholder(tok string) bool {
+	if tok == "{root}" || tok == "{listFile}" {
+		return true
+	}
+	_, ok := embeddedPlaceholder(tok)
+	return ok
+}
 
 func (c Config) validateExtractors() error {
 	names := make([]string, 0, len(c.Extractors))
@@ -211,11 +211,13 @@ func validateExtractor(name string, e Extractor) error {
 	}
 	for _, a := range e.Argv {
 		for _, tok := range placeholderRe.FindAllString(a, -1) {
-			switch {
-			case !knownPlaceholder(tok):
-				return fmt.Errorf("%s.argv: unknown placeholder %s", at, tok)
-			case tok == "{listFile}" && e.Type != ExtractorExec:
+			if tok == "{listFile}" && e.Type != ExtractorExec {
 				return fmt.Errorf("%s.argv: {listFile} is only available to exec extractors", at)
+			}
+			if name, ok := embeddedPlaceholder(tok); ok {
+				if _, found := extractors.Embedded(name); !found {
+					return fmt.Errorf("%s.argv: %s names no embedded file", at, tok)
+				}
 			}
 		}
 	}
@@ -231,8 +233,10 @@ func validateExtractor(name string, e Extractor) error {
 		}
 	}
 	for _, a := range e.VersionArgv {
-		if toks := placeholderRe.FindAllString(a, -1); len(toks) > 0 {
-			return fmt.Errorf("%s.version_argv: placeholders are not expanded (%s)", at, toks[0])
+		for _, tok := range placeholderRe.FindAllString(a, -1) {
+			if specialPlaceholder(tok) {
+				return fmt.Errorf("%s.version_argv: placeholders are not expanded (%s)", at, tok)
+			}
 		}
 	}
 	for _, x := range e.Extensions {

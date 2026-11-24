@@ -121,7 +121,7 @@ Code plugin's `.lsp.json` entry), optionally with `"extractor": "powershell-ast"
   is run and its edges are merged. `powershell-ast` is built in (see Call graph).
 - `extractors.<name>`: `type` `lsp` (argv is the server command line) or `exec`
   (argv is a program that prints JSON-lines records; `{root}`, `{listFile}` and
-  `{embedded:NAME}` are replaced). Optional: `env`, `extensions` (a subset of the
+  `{embedded:NAME}` are replaced, any other `{...}` text is literal). Optional: `env`, `extensions` (a subset of the
   language's), `version` or `version_argv` (part of the cache key: a new version
   re-indexes the language), `command_fallbacks`, `command_env`, `timeout_s`,
   `symbols` (exec: also provides symbols; default true when it is the language's

@@ -21,25 +21,11 @@ const (
 
 var placeholderRe = regexp.MustCompile(`\{[^{}]*\}`)
 
-// Placeholders returns the placeholder tokens of one argv element, in order
-// ("{root}", "{embedded:powershell-ast.ps1}", or any other "{...}" text, which
-// is an unknown placeholder). A brace that is not part of a "{...}" pair is
-// literal text.
+// Placeholders returns the "{...}" tokens of one argv element, in order. Only
+// {root}, {listFile} and {embedded:NAME} are special; every other token is
+// literal text that argv passes through unexpanded. A brace that is not part
+// of a "{...}" pair is literal too.
 func Placeholders(arg string) []string { return placeholderRe.FindAllString(arg, -1) }
-
-// IsKnownPlaceholder reports whether tok (one element of Placeholders) is
-// {root}, {listFile} or {embedded:NAME} with an embedded file NAME that exists.
-func IsKnownPlaceholder(tok string) bool {
-	switch tok {
-	case PlaceholderRoot, PlaceholderListFile:
-		return true
-	}
-	if name, ok := embeddedName(tok); ok {
-		_, found := extractors.Embedded(name)
-		return found
-	}
-	return false
-}
 
 func embeddedName(tok string) (string, bool) {
 	if strings.HasPrefix(tok, embeddedPrefix) && strings.HasSuffix(tok, "}") {
@@ -59,7 +45,7 @@ type Vars struct {
 }
 
 // ExpandArgv replaces the placeholders in every element of argv. A placeholder
-// may be a whole element or part of one. An unknown placeholder is an error.
+// may be a whole element or part of one. Any other "{...}" text is literal and stays as it is.
 func ExpandArgv(argv []string, v Vars) ([]string, error) {
 	embedded := v.Embedded
 	if embedded == nil {
@@ -85,8 +71,7 @@ func ExpandArgv(argv []string, v Vars) ([]string, error) {
 				}
 				return p
 			}
-			err = fmt.Errorf("unknown placeholder %s in argv element %q", tok, a)
-			return tok
+			return tok // not a placeholder: literal text
 		})
 		if err != nil {
 			return nil, err

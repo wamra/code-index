@@ -353,7 +353,7 @@ Rules for a session:
 
 | function | file | what |
 |---|---|---|
-| `extract.ExpandArgv(argv, Vars{Root, ListFile, Embedded})` | `argv.go` | expands `{root}`, `{listFile}`, `{embedded:NAME}`; an unknown placeholder or a `{listFile}` without a list file is an error |
+| `extract.ExpandArgv(argv, Vars{Root, ListFile, Embedded})` | `argv.go` | expands `{root}`, `{listFile}`, `{embedded:NAME}`; a `{listFile}` without a list file or an `{embedded:NAME}` with an unknown NAME is an error; other `{...}` text is left as it is |
 | `extract.EmbeddedPath(name)` | `argv.go` | writes the embedded file to `<user cache dir>/code-index/extractors/<stem>-<hash8><ext>` and returns the path; the lookup table is `extractors.Embedded(name)` |
 | `extract.IdentityArgv(argv, root)` | `argv.go` | the argv used in the fingerprint (section 5) |
 | `extract.ResolveCommand(ec, getenv, lookPath)` | `exec.go` | command resolution (4.2), shared by exec and lsp extractors and by `doctor` |
@@ -522,10 +522,13 @@ repositories whose `.Wammy/config.json` you trust. There is no trust gate.
 | `{listFile}` | exec only: a temp file with one absolute path per line, each `\n`-terminated (also the last) |
 | `{embedded:NAME}` | path of the file `NAME` embedded in this directory's Go package (today `powershell-ast.ps1`), written to `<user cache dir>/code-index/extractors/` under a content-hash name |
 
-A placeholder may be a whole argument or part of one (`--root={root}`). Any other
-`{...}` text is an unknown placeholder: a validation error. A brace that is not
-part of a `{...}` pair is literal. `{listFile}` in an `lsp` extractor is a
-validation error. There is no escape for a literal `{...}`.
+A placeholder may be a whole argument or part of one (`--root={root}`). Only these three are
+special. Any other `{...}` text is literal and passes through unexpanded, in
+validation, in `ExpandArgv` and in the fingerprint's `IdentityArgv`: a JSON
+argument (`--config={"a":1}`), an awk program (`awk '{print $1}'`) or `{}`. A brace
+that is not part of a `{...}` pair is literal too. Validation errors: `{listFile}`
+in an `lsp` extractor, and `{embedded:NAME}` when NAME is not an embedded file.
+Because the three tokens are always expanded, there is no escape for them.
 
 ### 4.4 Built-ins, the legacy shape, discovery
 

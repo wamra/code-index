@@ -49,8 +49,8 @@ func TestLangFingerprintErrorIsNotSwallowed(t *testing.T) {
 			Extractors: map[string]config.Extractor{"ext": {Type: config.ExtractorExec, Argv: argv}},
 		}
 	}
-	bad := cfgWith("tool", "{bogus}")
-	raw := extract.Fingerprint([]extract.Part{{Name: "ext", Type: config.ExtractorExec, Argv: []string{"tool", "{bogus}"}}})
+	bad := cfgWith("tool", "{embedded:nope.ps1}")
+	raw := extract.Fingerprint([]extract.Part{{Name: "ext", Type: config.ExtractorExec, Argv: []string{"tool", "{embedded:nope.ps1}"}}})
 	got := langFingerprint(ctx, bad, "x", "/w")
 	if got == raw {
 		t.Error("an IdentityArgv error fell back to the raw argv fingerprint")
@@ -58,7 +58,7 @@ func TestLangFingerprintErrorIsNotSwallowed(t *testing.T) {
 	if good := langFingerprint(ctx, cfgWith("tool", "{root}"), "x", "/w"); good == got {
 		t.Error("a broken extractor has the fingerprint of a good one")
 	}
-	if other := langFingerprint(ctx, cfgWith("tool", "{other}"), "x", "/w"); other == got {
+	if other := langFingerprint(ctx, cfgWith("tool", "{embedded:other.ps1}"), "x", "/w"); other == got {
 		t.Error("two different errors give the same fingerprint")
 	}
 	if again := langFingerprint(ctx, bad, "x", "/w"); again != got {
