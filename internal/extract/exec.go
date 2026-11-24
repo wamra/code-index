@@ -324,7 +324,7 @@ func (s *execSession) subprocess(ctx context.Context, files []string) ([]byte, e
 		// started still holds stdout (a daemon). The output is complete: keep
 		// it, and stop what is left (unix: the process group).
 		killGroup(cmd)
-		s.logf("  %s: a process started by the extractor kept its output open; using the output and stopping it", s.e.name)
+		s.logf("  %s: a process started by the extractor kept its output open; using the output and signalling its process group", s.e.name)
 		err = nil
 	}
 	if err != nil {

@@ -385,7 +385,9 @@ Rules for a session:
   SIGHUP (terminal close, `timeout`, CI cancel): the run cancels its context, which
   kills the extractor's process group, then exits non-zero; the lock is released and
   the files not reached stay retryable. Without this the separate process group
-  would leave the extractor running until `timeout_s`. Windows handles the
+  would leave the extractor running until `timeout_s`. A SIGHUP that was inherited
+  as ignored (`nohup`, `disown`) stays ignored, so a detached run survives its
+  terminal. Windows handles the
   interrupt only.
 - A non-zero exit returns `extractor "<name>": exit status N: <last 300 characters of stderr>`.
 - Records are matched to requested files by exact string, then cleaned path, then

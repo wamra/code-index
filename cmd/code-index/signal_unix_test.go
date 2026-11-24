@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wamra/code-index/internal/proctest"
+	"github.com/wamra/code-index/internal/store"
 )
 
 func readPID(t *testing.T, path string, wait time.Duration) int {
@@ -36,6 +38,9 @@ func readPID(t *testing.T, path string, wait time.Duration) int {
 func TestIndexSIGTERMKillsExtractorGroup(t *testing.T) {
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGHUP} {
 		t.Run(sig.String(), func(t *testing.T) {
+			if sig == syscall.SIGHUP && signal.Ignored(syscall.SIGHUP) {
+				t.Skip("SIGHUP is ignored in this process (nohup); the child inherits that")
+			}
 			tmp := t.TempDir()
 			root := filepath.Join(tmp, "repo")
 			if err := os.MkdirAll(root, 0o755); err != nil {
@@ -98,10 +103,86 @@ func TestIndexSIGTERMKillsExtractorGroup(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(root, ".Wammy", "code.sqlite")); err != nil {
 				t.Fatal(err)
 			}
-			out, err := exec.Command("sqlite3", filepath.Join(root, ".Wammy", "code.sqlite"), "select status from files").CombinedOutput()
-			if err == nil && strings.TrimSpace(string(out)) == "ok" {
-				t.Errorf("the interrupted file is stored ok: %s", out)
+			st, err := store.Open(filepath.Join(root, ".Wammy", "code.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			var okFiles int
+			if err := st.DB().QueryRow(`SELECT count(*) FROM files WHERE status='ok'`).Scan(&okFiles); err != nil {
+				t.Fatal(err)
+			}
+			if okFiles != 0 {
+				t.Errorf("the interrupted file is stored ok (%d row(s))", okFiles)
 			}
 		})
+	}
+}
+
+// Under nohup SIGHUP arrives ignored and must stay ignored: a detached index
+// run survives its terminal closing. SIGTERM still stops it.
+func TestIndexKeepsAnIgnoredSIGHUPIgnored(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "repo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a.gb"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	extPID := filepath.Join(tmp, "ext.pid")
+	script := filepath.Join(tmp, "ext.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho $$ > "+extPID+"\nexec sleep 309\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := map[string]any{
+		"languages":  map[string]any{"gb": map[string]any{"extensions": []string{".gb"}, "extractor": "ext"}},
+		"extractors": map[string]any{"ext": map[string]any{"type": "exec", "argv": []string{script, "{listFile}"}, "symbols": true, "timeout_s": 600}},
+	}
+	b, _ := json.Marshal(cfg)
+	cfgPath := filepath.Join(tmp, "config.json")
+	if err := os.WriteFile(cfgPath, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// the shell ignores SIGHUP and execs the CLI, which inherits the ignore, as under nohup
+	cmd := exec.Command(sh, "-c", `trap '' HUP; exec "$0" "$@"`, os.Args[0], "index", root)
+	cmd.Env = append(os.Environ(), "CODE_INDEX_TEST_CLI=1", "CODE_INDEX_CONFIG="+cfgPath)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	ext := readPID(t, extPID, 15*time.Second)
+	defer func() {
+		if proctest.Alive(ext) {
+			proctest.Kill(ext)
+		}
+		cmd.Process.Kill()
+	}()
+	if err := cmd.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("index exited on an ignored SIGHUP: %v", err)
+	case <-time.After(1500 * time.Millisecond):
+	}
+	if !proctest.Alive(ext) {
+		t.Fatal("the extractor was killed by an ignored SIGHUP")
+	}
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("index did not exit on SIGTERM")
+	}
+	if !proctest.WaitGone(ext, 5*time.Second) {
+		t.Error("the extractor survived SIGTERM")
 	}
 }
