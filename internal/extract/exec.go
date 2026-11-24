@@ -19,8 +19,10 @@ import (
 // stderrTail is how much of an extractor's stderr goes into its error message.
 const stderrTail = 300
 
-// execWaitDelay bounds the wait for a killed extractor's inherited pipes.
-const execWaitDelay = 5 * time.Second
+// execWaitDelay is the backstop for a killed extractor's inherited pipes: on
+// unix the whole process group is killed, so the pipes close at once; on
+// Windows only the direct child is killed.
+const execWaitDelay = 2 * time.Second
 
 // execExtractor is the generic exec extractor: a subprocess that is given a
 // list file of absolute paths and prints JSON-lines records on stdout.
@@ -301,6 +303,7 @@ func (s *execSession) subprocess(ctx context.Context, files []string) ([]byte, e
 	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(rctx, s.cmd, argv[1:]...)
+	killOnCancel(cmd)
 	cmd.Dir = s.env.Root
 	cmd.Env = os.Environ()
 	keys := make([]string, 0, len(ec.Env))

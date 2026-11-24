@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +25,18 @@ func helperMain() {
 	mode := os.Getenv("EXTRACT_TEST_HELPER")
 	args := os.Args[1:]
 	if mode == "sleep" {
+		time.Sleep(time.Minute)
+		return
+	}
+	if mode == "spawn" { // start a long-lived grandchild that shares our stdout/stderr, record its pid
+		c := exec.Command(os.Args[0], "-test.run=^$")
+		c.Env = append(os.Environ(), "EXTRACT_TEST_HELPER=sleep")
+		c.Stdout, c.Stderr = os.Stdout, os.Stderr
+		if err := c.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, "spawn:", err)
+			os.Exit(4)
+		}
+		os.WriteFile(os.Getenv("EXTRACT_TEST_PIDFILE"), []byte(strconv.Itoa(c.Process.Pid)), 0o644)
 		time.Sleep(time.Minute)
 		return
 	}

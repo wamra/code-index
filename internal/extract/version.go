@@ -35,6 +35,8 @@ func ConfiguredVersion(ctx context.Context, ec config.Extractor) string {
 	ctx, cancel := context.WithTimeout(ctx, VersionTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, ec.VersionArgv[1:]...)
+	killOnCancel(cmd)
+	cmd.WaitDelay = execWaitDelay
 	cmd.Env = os.Environ()
 	keys := make([]string, 0, len(ec.Env))
 	for k := range ec.Env {
