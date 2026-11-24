@@ -10,8 +10,38 @@ import (
 	"testing"
 	"unicode/utf16"
 
+	"github.com/wamra/code-index/internal/config"
 	"github.com/wamra/code-index/internal/extract"
 )
+
+// runPowerShellAST runs the real script through the generic exec runner with the
+// built-in powershell-ast entry, using interp as the interpreter (the entry's
+// command_env override). It returns the records of the files and the session's
+// notes (non-JSON lines).
+func runPowerShellAST(t *testing.T, interp string, files []string) ([]extract.Record, []string, error) {
+	t.Helper()
+	ec := config.BuiltinExtractors()[config.BuiltinPowerShellAST]
+	t.Setenv(ec.CommandEnv, interp)
+	ex, err := extract.New("powershell", config.BuiltinPowerShellAST, ec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := ex.Start(context.Background(), extract.Env{Root: filepath.Dir(files[0])})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer sess.Close()
+	var recs []extract.Record
+	err = sess.Edges(context.Background(), files, nil, func(_ string, rs []extract.Record) error {
+		recs = append(recs, rs...)
+		return nil
+	})
+	var notes []string
+	if n, ok := sess.(extract.Noter); ok {
+		notes = n.Notes()
+	}
+	return recs, notes, err
+}
 
 func TestParseASTLinesFromRecordedSample(t *testing.T) {
 	f, err := os.Open("testdata/powershell-ast.sample.jsonl")
@@ -75,7 +105,6 @@ func TestRealPowerShellExtractor(t *testing.T) {
 }
 
 func realPowerShellExtractor(t *testing.T, interp string) {
-	t.Setenv(PowerShellEnv, interp)
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("USERPROFILE", tmp)
@@ -100,13 +129,9 @@ Write-Output "h\u00e9llo \u00fcber"; Get-Accent
 	if err := os.WriteFile(file, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, err := defaultExtract(context.Background(), ExtractorPowerShellAST, []string{file})
-	if err != nil {
-		t.Fatal(err)
-	}
-	recs, skipped, err := extract.ParseLines(strings.NewReader(string(out)))
-	if err != nil || skipped != 0 {
-		t.Fatalf("skipped=%d err=%v\n%s", skipped, err, out)
+	recs, notes, err := runPowerShellAST(t, interp, []string{file})
+	if err != nil || len(notes) != 0 {
+		t.Fatalf("notes=%v err=%v", notes, err)
 	}
 	// Columns are 1-based UTF-16 units, so a non-ASCII character before a call
 	// must not shift it (5.1 would, if it decoded the file as ANSI).
@@ -126,7 +151,7 @@ Write-Output "h\u00e9llo \u00fcber"; Get-Accent
 		}
 	}
 	if !gotAccent {
-		t.Errorf("no call record for Get-Accent in %s", out)
+		t.Errorf("no call record for Get-Accent in %+v", recs)
 	}
 	have := map[string]bool{}
 	for _, r := range recs {
@@ -155,6 +180,8 @@ Write-Output "h\u00e9llo \u00fcber"; Get-Accent
 	}
 }
 
+// Command resolution of the built-in powershell-ast entry: command_env first
+// (and alone), else argv[0] (pwsh), else command_fallbacks (powershell).
 func TestFindPowerShell(t *testing.T) {
 	onPath := func(names ...string) func(string) (string, error) {
 		return func(n string) (string, error) {
@@ -166,6 +193,7 @@ func TestFindPowerShell(t *testing.T) {
 			return "", errors.New("not found")
 		}
 	}
+	ec := config.BuiltinExtractors()[config.BuiltinPowerShellAST]
 	for _, c := range []struct {
 		name, override string
 		path           []string
@@ -178,7 +206,13 @@ func TestFindPowerShell(t *testing.T) {
 		{"override path", "/opt/ps/pwsh", []string{"/opt/ps/pwsh"}, "/bin//opt/ps/pwsh"},
 		{"override missing does not fall back", "nope", []string{"pwsh"}, ""},
 	} {
-		got, err := findPowerShell(c.override, onPath(c.path...))
+		getenv := func(k string) string {
+			if k == ec.CommandEnv {
+				return c.override
+			}
+			return ""
+		}
+		got, err := extract.ResolveCommand(ec, getenv, onPath(c.path...))
 		if c.want == "" {
 			if !errors.Is(err, ErrExtractorUnavailable) || got != "" {
 				t.Errorf("%s: got %q, %v", c.name, got, err)

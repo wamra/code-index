@@ -252,7 +252,7 @@ func Run(ctx context.Context, st *store.Store, cfg config.Config, o Options) (Re
 			o.logf("  %s: %d symbol(s)", w.c.rel, fs.symbols)
 		}
 		if edgeLangs[lang] && ctx.Err() == nil && res.LangErrors[lang] == "" {
-			es, err := computeEdges(ctx, st, o, root, lang, lc, cl)
+			es, err := computeEdges(ctx, st, o, root, lang, cfg.ExtractorsFor(lang), lc, cl)
 			res.Notes = append(res.Notes, es.Notes...)
 			if err != nil {
 				res.Notes = append(res.Notes, fmt.Sprintf("%s: edges not computed: %v", lang, err))

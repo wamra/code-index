@@ -48,6 +48,11 @@ type Extractor struct {
 
 	// TimeoutS is the exec run timeout in seconds (default 600).
 	TimeoutS int `json:"timeout_s,omitempty"`
+	// Symbols says an exec extractor also provides the symbols of a file
+	// (phase 1); every exec extractor provides edges. Unset: true only when the
+	// entry is the language's only extractor (decided by Config.ExtractorsFor,
+	// which always returns it set). exec only.
+	Symbols *bool `json:"symbols,omitempty"`
 
 	// LanguageID is the LSP languageId sent in didOpen (default: the language name).
 	LanguageID string `json:"language_id,omitempty"`

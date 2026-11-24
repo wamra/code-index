@@ -1,11 +1,9 @@
 package indexer
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/wamra/code-index/internal/extract"
@@ -46,7 +44,6 @@ func TestPowerShellCallsCarryResolution(t *testing.T) {
 	if interp == "" {
 		t.Skip("no PowerShell installed (the recorded sample was checked)")
 	}
-	t.Setenv(PowerShellEnv, interp)
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("USERPROFILE", tmp)
@@ -56,13 +53,9 @@ func TestPowerShellCallsCarryResolution(t *testing.T) {
 	if err := os.WriteFile(file, []byte("function A {\n  B\n}\nA\nWrite-Output x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, err := defaultExtract(context.Background(), ExtractorPowerShellAST, []string{file})
-	if err != nil {
-		t.Fatal(err)
-	}
-	live, skipped, err := extract.ParseLines(strings.NewReader(string(out)))
-	if err != nil || skipped != 0 {
-		t.Fatalf("skipped=%d err=%v\n%s", skipped, err, out)
+	live, notes, err := runPowerShellAST(t, interp, []string{file})
+	if err != nil || len(notes) != 0 {
+		t.Fatalf("notes=%v err=%v", notes, err)
 	}
 	n := 0
 	for _, r := range live {

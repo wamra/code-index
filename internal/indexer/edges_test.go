@@ -184,7 +184,7 @@ func TestMutualRecursionEdges(t *testing.T) {
 // file names made absolute under the root of the workspace being indexed.
 func astSample(t *testing.T, root string) indexer.ExtractFunc {
 	return func(_ context.Context, name string, files []string) ([]byte, error) {
-		if name != indexer.ExtractorPowerShellAST {
+		if name != config.BuiltinPowerShellAST {
 			t.Errorf("extractor name = %q", name)
 		}
 		for _, f := range files {
@@ -214,7 +214,7 @@ func astSample(t *testing.T, root string) indexer.ExtractFunc {
 func astCfg(opts string) config.Config {
 	cfg := fakeCfg(opts, psExts...)
 	l := cfg.Languages["fake"]
-	l.Extractor = indexer.ExtractorPowerShellAST
+	l.Extractor = config.BuiltinPowerShellAST
 	cfg.Languages["fake"] = l
 	return cfg
 }

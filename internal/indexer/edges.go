@@ -1,7 +1,6 @@
 package indexer
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -90,6 +89,7 @@ type symIndex struct {
 	byFile    map[int64][]*symLoc
 	funcs     map[string][]*symLoc // lower-case name -> function-like symbols
 	fileByID  map[int64]*fileInfo
+	exts      []string // the language's extensions, in config order (resolveFile)
 }
 
 // callable kinds get a references request; container kinds can be the source
@@ -292,16 +292,18 @@ type edgeStats struct {
 }
 
 // computeEdges rebuilds every edge whose call site is in a file of lang: LSP
-// references (cl, when the server advertises them) merged with the AST
-// extractor's output (when the language configures one). The rebuild covers
+// references (cl, when the server advertises them) merged with the records of
+// the language's exec extractors (exs, from Config.ExtractorsFor; lsp entries
+// are served by cl and skipped here). The rebuild covers
 // all files of the language, not only the changed ones: a change in one file
 // moves symbol ids and changes who references whom in the others.
-func computeEdges(ctx context.Context, st *store.Store, o Options, root, lang string, lc config.Language, cl *lsp.Client) (edgeStats, error) {
+func computeEdges(ctx context.Context, st *store.Store, o Options, root, lang string, exs []config.NamedExtractor, lc config.Language, cl *lsp.Client) (edgeStats, error) {
 	var es edgeStats
 	idx, err := loadIndex(ctx, st.DB(), root, lang)
 	if err != nil {
 		return es, err
 	}
+	idx.exts = lc.Extensions
 	set := &edgeSet{}
 	if cl != nil {
 		if cl.Capabilities().References {
@@ -317,41 +319,9 @@ func computeEdges(ctx context.Context, st *store.Store, o Options, root, lang st
 			es.Notes = append(es.Notes, fmt.Sprintf("%s: the server does not advertise references; no LSP edges", lang))
 		}
 	}
-	var recs []extract.Record
-	if lc.Extractor != "" {
-		var files []string
-		for _, f := range idx.files {
-			if ext := strings.ToLower(filepath.Ext(f.path)); ext == ".ps1" || ext == ".psm1" {
-				files = append(files, f.abs)
-			}
-		}
-		if len(files) > 0 {
-			run := o.Extract
-			if run == nil {
-				run = defaultExtract
-			}
-			out, err := run(ctx, string(lc.Extractor), files)
-			switch {
-			case errors.Is(err, ErrExtractorUnavailable):
-				es.Notes = append(es.Notes, fmt.Sprintf("%s: %v; skipping the AST extractor", lang, err))
-			case err != nil:
-				return es, fmt.Errorf("extractor %s: %w", lc.Extractor, err)
-			default:
-				var skipped int
-				recs, skipped, err = extract.ParseLines(bytes.NewReader(out))
-				if err != nil {
-					return es, err
-				}
-				if skipped > 0 {
-					es.Notes = append(es.Notes, fmt.Sprintf("%s: ignored %d non-JSON line(s) of extractor output", lang, skipped))
-				}
-				for _, r := range recs {
-					if r.T == "error" {
-						es.Notes = append(es.Notes, fmt.Sprintf("%s: extractor failed on %s: %s", lang, r.File, r.Message))
-					}
-				}
-			}
-		}
+	recs, ran, err := execRecords(ctx, o, root, lang, idx, exs, &es)
+	if err != nil {
+		return es, err
 	}
 
 	hasVec := false
@@ -372,7 +342,7 @@ func computeEdges(ctx context.Context, st *store.Store, o Options, root, lang st
 	}
 	es.Aliases = ar.aliases
 	if ar.noResolution > 0 {
-		es.Notes = append(es.Notes, fmt.Sprintf("%s: ignored %d call record(s) without a resolution (extractor %s writes schema v1)", lang, ar.noResolution, lc.Extractor))
+		es.Notes = append(es.Notes, fmt.Sprintf("%s: ignored %d call record(s) without a resolution (extractor %s writes schema v1)", lang, ar.noResolution, strings.Join(ran, ",")))
 	}
 	if ar.notIndexed > 0 {
 		es.Notes = append(es.Notes, fmt.Sprintf("%s: %d call record(s) point to a definition that is not indexed", lang, ar.notIndexed))
@@ -671,20 +641,24 @@ func (x *symIndex) symbolIn(fileID int64, name string, line, col int) *symLoc {
 }
 
 // resolveFile finds the indexed file a dot-sourced or imported path names. The
-// literal is relative to the importing file, else to the repo root; an
-// Import-Module argument that is a bare name matches a module file by name
-// (.psd1 before .psm1).
+// literal is relative to the importing file, else to the repo root. A literal
+// that ends in one of the language's extensions is a file path. An import
+// argument that is a bare name matches an indexed file by base name plus one of
+// the language's extensions, the later-listed extension first (a manifest
+// extension listed last wins over a script extension listed first).
 func (x *symIndex) resolveFile(from *fileInfo, lit string, module bool) *fileInfo {
 	lit = strings.Trim(strings.ReplaceAll(strings.TrimSpace(lit), `\`, "/"), `"'`)
 	if lit == "" {
 		return nil
 	}
-	switch strings.ToLower(path.Ext(lit)) {
-	case ".ps1", ".psm1", ".psd1":
-		module = false
+	for _, e := range x.exts {
+		if strings.EqualFold(path.Ext(lit), e) {
+			module = false
+		}
 	}
 	if module && !strings.Contains(lit, "/") {
-		for _, ext := range []string{".psd1", ".psm1", ".ps1"} {
+		for i := len(x.exts) - 1; i >= 0; i-- {
+			ext := x.exts[i]
 			for _, f := range x.files {
 				if strings.EqualFold(path.Base(f.path), lit+ext) {
 					return f
@@ -830,4 +804,79 @@ func refreshLinks(ctx context.Context, st *store.Store) (int, error) {
 		changed++
 	}
 	return changed, tx.Commit()
+}
+
+// execRecords runs every exec extractor of the language (exs, in run order)
+// over the files its extensions select and returns all their records, with the
+// names of the extractors that ran. An unavailable extractor adds one note and
+// is skipped; any other failure ends the language's edges. Notes go to es.
+func execRecords(ctx context.Context, o Options, root, lang string, idx *symIndex, exs []config.NamedExtractor, es *edgeStats) ([]extract.Record, []string, error) {
+	var recs []extract.Record
+	var ran []string
+	for _, ne := range exs {
+		if ne.Type != config.ExtractorExec {
+			continue
+		}
+		files := filesWithExtensions(idx.files, ne.Extensions)
+		if len(files) == 0 {
+			continue
+		}
+		got, notes, err := runExec(ctx, o, root, lang, ne, files)
+		es.Notes = append(es.Notes, notes...)
+		switch {
+		case errors.Is(err, ErrExtractorUnavailable):
+			es.Notes = append(es.Notes, fmt.Sprintf("%s: %v; skipping the AST extractor", lang, err))
+			continue
+		case err != nil:
+			return nil, nil, fmt.Errorf("extractor %s: %w", ne.Name, err)
+		}
+		ran = append(ran, ne.Name)
+		recs = append(recs, got...)
+		for _, r := range got {
+			if r.T == extract.TypeError {
+				es.Notes = append(es.Notes, fmt.Sprintf("%s: extractor failed on %s: %s", lang, r.File, r.Message))
+			}
+		}
+	}
+	return recs, ran, nil
+}
+
+// runExec starts one exec extractor, runs its edge phase over files and closes it.
+// notes are the session's own remarks (non-JSON lines), prefixed with the language.
+func runExec(ctx context.Context, o Options, root, lang string, ne config.NamedExtractor, files []string) (recs []extract.Record, notes []string, err error) {
+	ex, err := extract.New(lang, ne.Name, ne.Extractor)
+	if err != nil {
+		return nil, nil, err
+	}
+	sess, err := ex.Start(ctx, extract.Env{Root: root, Exec: o.Extract, Logf: o.logf})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer sess.Close()
+	err = sess.Edges(ctx, files, nil, func(_ string, rs []extract.Record) error {
+		recs = append(recs, rs...)
+		return nil
+	})
+	if n, ok := sess.(extract.Noter); ok {
+		for _, line := range n.Notes() {
+			notes = append(notes, lang+": "+line)
+		}
+	}
+	return recs, notes, err
+}
+
+// filesWithExtensions returns the absolute paths of the files whose extension
+// (case-insensitive) is in exts.
+func filesWithExtensions(files []*fileInfo, exts []string) []string {
+	want := make(map[string]bool, len(exts))
+	for _, e := range exts {
+		want[strings.ToLower(e)] = true
+	}
+	var out []string
+	for _, f := range files {
+		if want[strings.ToLower(filepath.Ext(f.path))] {
+			out = append(out, f.abs)
+		}
+	}
+	return out
 }

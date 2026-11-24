@@ -14,6 +14,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("EXTRACT_TEST_HELPER") != "" {
+		helperMain()
+		return
+	}
 	// the test binary doubles as the version command
 	if os.Getenv("EXTRACT_TEST_VERSION") != "" {
 		os.Stdout.WriteString("  " + os.Getenv("EXTRACT_TEST_VERSION") + "  \nsecond line\n")
@@ -270,7 +274,7 @@ func TestConfiguredVersion(t *testing.T) {
 }
 
 func TestFactoryStubsAndUnknownType(t *testing.T) {
-	for _, typ := range []string{config.ExtractorExec, config.ExtractorLSP} {
+	for _, typ := range []string{config.ExtractorLSP} { // exec is implemented (exec_test.go)
 		_, err := New("lang", "x", config.Extractor{Type: typ, Argv: []string{"c"}})
 		if err == nil || !strings.Contains(err.Error(), "not implemented in this build") {
 			t.Errorf("%s: %v", typ, err)
