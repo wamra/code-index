@@ -114,3 +114,67 @@ func TestExtractorsConfigExampleDecodes(t *testing.T) {
 		t.Errorf("unknown field: %v", err)
 	}
 }
+
+// Validation holes: each of these used to pass.
+func TestValidateExtractorHoles(t *testing.T) {
+	ps := Language{Extensions: []string{".ps1"}}
+	with := func(l Language, exs map[string]Extractor) Config {
+		return Config{Languages: map[string]Language{"ps": l}, Extractors: exs}
+	}
+	lsp := func(mod func(*Extractor)) Extractor {
+		e := Extractor{Type: ExtractorLSP, Argv: []string{"pwsh", "-File", "s.ps1"}}
+		if mod != nil {
+			mod(&e)
+		}
+		return e
+	}
+	exe := func(mod func(*Extractor)) Extractor {
+		e := Extractor{Type: ExtractorExec, Argv: []string{"tool", "{listFile}"}}
+		if mod != nil {
+			mod(&e)
+		}
+		return e
+	}
+	lang := func(command string, names ...string) Language {
+		l := ps
+		l.Command = command
+		l.Extractor = NewExtractorNames(names...)
+		return l
+	}
+	for _, c := range []struct {
+		name string
+		cfg  Config
+		want string // "" = valid
+	}{
+		{"command + lsp extractor", with(lang("srv", "pses"), map[string]Extractor{"pses": lsp(nil)}), "languages.ps: both command and an lsp extractor (pses); use one"},
+		{"command + lsp among several", with(lang("srv", "tool", "pses"), map[string]Extractor{"pses": lsp(nil), "tool": exe(nil)}), "both command and an lsp extractor (pses)"},
+		{"legacy command + builtin exec", with(lang("srv", "powershell-ast"), nil), ""},
+		{"legacy command alone", with(lang("srv"), nil), ""},
+		{"lsp extractor alone", with(lang("", "pses"), map[string]Extractor{"pses": lsp(nil)}), ""},
+		{"negative timeout_s", with(lang("", "tool"), map[string]Extractor{"tool": exe(func(e *Extractor) { e.TimeoutS = -1 })}), "extractors.tool.timeout_s"},
+		{"negative startup_timeout_s", with(lang("", "pses"), map[string]Extractor{"pses": lsp(func(e *Extractor) { e.StartupTimeoutS = -5 })}), "extractors.pses.startup_timeout_s"},
+		{"negative request_timeout_s", with(lang("", "pses"), map[string]Extractor{"pses": lsp(func(e *Extractor) { e.RequestTimeoutS = -5 })}), "extractors.pses.request_timeout_s"},
+		{"zero timeouts mean default", with(lang("", "tool"), map[string]Extractor{"tool": exe(func(e *Extractor) { e.TimeoutS = 0 })}), ""},
+		{"duplicate name", with(lang("", "tool", "tool"), map[string]Extractor{"tool": exe(nil)}), `languages.ps.extractor: "tool" is listed twice`},
+		{"empty version_argv[0]", with(lang("", "tool"), map[string]Extractor{"tool": exe(func(e *Extractor) { e.VersionArgv = []string{"", "v"} })}), "extractors.tool.version_argv"},
+		{"empty argv[0]", with(lang("", "tool"), map[string]Extractor{"tool": exe(func(e *Extractor) { e.Argv = []string{"", "x"} })}), "extractors.tool.argv"},
+		{"empty argv", with(lang("", "tool"), map[string]Extractor{"tool": exe(func(e *Extractor) { e.Argv = nil })}), "extractors.tool.argv"},
+	} {
+		err := c.cfg.Resolved().Validate()
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: unexpected error: %v", c.name, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: error = %v, want it to contain %q", c.name, err, c.want)
+		}
+	}
+	// a legacy command stays legal after normalisation (Resolved twice)
+	r := with(lang("srv"), nil).Resolved().Resolved()
+	if err := r.Validate(); err != nil {
+		t.Errorf("resolved twice: %v", err)
+	}
+	r = with(lang("", "pses"), map[string]Extractor{"pses": lsp(nil)}).Resolved().Resolved()
+	if err := r.Validate(); err != nil {
+		t.Errorf("new style resolved twice: %v", err)
+	}
+}

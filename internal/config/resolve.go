@@ -36,14 +36,14 @@ func (c Config) lookupExtractor(name string) (e Extractor, builtin, ok bool) {
 func (e Extractor) withDefaults() Extractor {
 	switch e.Type {
 	case ExtractorExec:
-		if e.TimeoutS <= 0 {
+		if e.TimeoutS == 0 { // a negative value is left for Validate to reject
 			e.TimeoutS = DefaultExecTimeoutS
 		}
 	case ExtractorLSP:
-		if e.StartupTimeoutS <= 0 {
+		if e.StartupTimeoutS == 0 {
 			e.StartupTimeoutS = DefaultStartupS
 		}
-		if e.RequestTimeoutS <= 0 {
+		if e.RequestTimeoutS == 0 {
 			e.RequestTimeoutS = DefaultRequestS
 		}
 	}
@@ -219,6 +219,17 @@ func validateExtractor(name string, e Extractor) error {
 			}
 		}
 	}
+	if len(e.VersionArgv) > 0 && e.VersionArgv[0] == "" {
+		return fmt.Errorf("%s.version_argv: the first element (the command) must not be empty", at)
+	}
+	for _, f := range []struct {
+		n string
+		v int
+	}{{"timeout_s", e.TimeoutS}, {"startup_timeout_s", e.StartupTimeoutS}, {"request_timeout_s", e.RequestTimeoutS}} {
+		if f.v < 0 {
+			return fmt.Errorf("%s.%s: %d must not be negative (0 means the default)", at, f.n, f.v)
+		}
+	}
 	for _, a := range e.VersionArgv {
 		if toks := placeholderRe.FindAllString(a, -1); len(toks) > 0 {
 			return fmt.Errorf("%s.version_argv: placeholders are not expanded (%s)", at, toks[0])
@@ -266,6 +277,20 @@ func (c Config) validateLanguageExtractors(lang string, l Language) error {
 	if len(names) == 0 {
 		return fmt.Errorf("languages.%s.extractor is required (or the legacy command)", lang)
 	}
+	listed := map[string]bool{}
+	for _, n := range names {
+		if listed[n] {
+			return fmt.Errorf("languages.%s.extractor: %q is listed twice", lang, n)
+		}
+		listed[n] = true
+	}
+	if first, ok := c.firstLSP(names); ok && l.Command != "" && !sameCommand(l, first) {
+		for _, n := range names {
+			if e, _, _ := c.lookupExtractor(n); e.Type == ExtractorLSP {
+				return fmt.Errorf("languages.%s: both command and an lsp extractor (%s); use one", lang, n)
+			}
+		}
+	}
 	have := map[string]bool{}
 	for _, x := range l.Extensions {
 		have[strings.ToLower(x)] = true
@@ -285,6 +310,21 @@ func (c Config) validateLanguageExtractors(lang string, l Language) error {
 		}
 	}
 	return nil
+}
+
+// sameCommand reports whether l.Command and l.Args are what Resolved copied
+// from the lsp extractor e (a new-style language) or made into it (a legacy
+// language): then there is one language server, not two.
+func sameCommand(l Language, e Extractor) bool {
+	if len(e.Argv) == 0 || l.Command != e.Argv[0] || len(l.Args) != len(e.Argv)-1 {
+		return false
+	}
+	for i, a := range l.Args {
+		if a != e.Argv[i+1] {
+			return false
+		}
+	}
+	return true
 }
 
 // extractorNames lists every extractor name that can be referenced, sorted.
