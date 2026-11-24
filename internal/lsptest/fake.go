@@ -32,13 +32,16 @@ type Options struct {
 	ConfigReply    func(raw json.RawMessage)
 	Refs           bool      // advertise referencesProvider and answer it by scanning the workspace for the word at the position
 	RefsFail       bool      // textDocument/references answers an error
+	CallHier       bool      // advertise callHierarchyProvider; prepareCallHierarchy and incomingCalls scan the workspace like references, minus every declaration
+	CallHierFail   bool      // callHierarchy/incomingCalls answers an error (implies CallHier)
+	DiePath        string    // the server exits when documentSymbol, prepareCallHierarchy or references arrive for a URI containing this text
 	OpenCalls      *[]string // records didOpen URIs
 	ConfigRepliesN *int
 }
 
 // ParseOptions reads the CODE_INDEX_FAKE_LSP value: comma-separated flags
 // "flat", "junk", "starting=N", "nohover", "nodocsymbol", "failpath=TEXT", "config=N",
-// "refs", "refsfail".
+// "refs", "refsfail", "callhier", "callhierfail", "diepath=TEXT".
 func ParseOptions(s string) Options {
 	var o Options
 	for _, f := range strings.Split(s, ",") {
@@ -60,6 +63,12 @@ func ParseOptions(s string) Options {
 			o.Refs = true
 		case "refsfail":
 			o.Refs, o.RefsFail = true, true
+		case "callhier":
+			o.CallHier = true
+		case "callhierfail":
+			o.CallHier, o.CallHierFail = true, true
+		case "diepath":
+			o.DiePath = v
 		case "failpath":
 			o.FailPath = v
 		case "config":
@@ -223,6 +232,9 @@ outer:
 			if o.Refs {
 				caps["referencesProvider"] = true
 			}
+			if o.CallHier {
+				caps["callHierarchyProvider"] = true
+			}
 			var ip struct {
 				RootPath string `json:"rootPath"`
 			}
@@ -272,6 +284,9 @@ outer:
 				continue
 			}
 			syms := parse(text)
+			if m.Method == "textDocument/documentSymbol" && o.DiePath != "" && strings.Contains(p.TextDocument.URI, o.DiePath) {
+				return
+			}
 			if m.Method == "textDocument/hover" {
 				for _, s := range syms {
 					if s.sel.Start == p.Position {
@@ -308,7 +323,49 @@ outer:
 			} else {
 				reply(hierarchical(syms, -1))
 			}
+		case "textDocument/prepareCallHierarchy":
+			var p struct {
+				TextDocument struct{ URI string } `json:"textDocument"`
+				Position     pos                  `json:"position"`
+			}
+			json.Unmarshal(m.Params, &p)
+			if o.DiePath != "" && strings.Contains(p.TextDocument.URI, o.DiePath) {
+				return
+			}
+			text, open := docs[p.TextDocument.URI]
+			if !open {
+				fail(-32602, "document not open")
+				continue
+			}
+			items := []map[string]any{}
+			for _, s := range parse(text) {
+				if s.sel.Start == p.Position {
+					items = append(items, callItem(p.TextDocument.URI, s))
+				}
+			}
+			if len(items) == 0 {
+				reply(nil)
+				continue
+			}
+			reply(items)
+		case "callHierarchy/incomingCalls":
+			if o.CallHierFail {
+				fail(-32603, "incomingCalls failed in fake server")
+				continue
+			}
+			var p struct {
+				Item struct {
+					Name           string `json:"name"`
+					URI            string `json:"uri"`
+					SelectionRange rng    `json:"selectionRange"`
+				} `json:"item"`
+			}
+			json.Unmarshal(m.Params, &p)
+			reply(incomingCalls(root, p.Item.URI, p.Item.Name, p.Item.SelectionRange.Start))
 		case "textDocument/references":
+			if o.DiePath != "" && strings.Contains(string(m.Params), o.DiePath) {
+				return
+			}
 			if o.RefsFail {
 				fail(-32603, "references failed in fake server")
 				continue
@@ -340,13 +397,21 @@ var declBeforeRe = regexp.MustCompile(`\b(function|class)\s+$`)
 
 var wordRe = regexp.MustCompile(`[\w-]+`)
 
-// references answers textDocument/references the way a naive server would:
-// every whole-word occurrence of the word at the position in any file under
-// root, except the occurrence at the position itself (the declaration).
-func references(root, uri, text string, at pos) []map[string]any {
+// occurrence is one whole-word hit of the workspace scan.
+type occurrence struct {
+	uri       string
+	path      string
+	line      int
+	start     int
+	end       int
+	fileLines []string // the whole file, for finding the enclosing symbol
+}
+
+// wordAt returns the identifier at the position, "" if there is none.
+func wordAt(text string, at pos) string {
 	lines := strings.Split(text, "\n")
 	if at.Line >= len(lines) {
-		return []map[string]any{}
+		return ""
 	}
 	var word string
 	for _, m := range wordRe.FindAllStringIndex(lines[at.Line], -1) {
@@ -354,11 +419,17 @@ func references(root, uri, text string, at pos) []map[string]any {
 			word = lines[at.Line][m[0]:m[1]]
 		}
 	}
-	out := []map[string]any{}
+	return word
+}
+
+// scan walks root and returns every whole-word occurrence of word except the
+// occurrence at the position at in declURI (the declaration asked about) and
+// the ones that follow "function " or "class " (other declarations of the name).
+func scan(root, declURI, word string, at pos) []occurrence {
+	var out []occurrence
 	if word == "" || root == "" {
 		return out
 	}
-	declURI := uri
 	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -374,15 +445,77 @@ func references(root, uri, text string, at pos) []map[string]any {
 			return nil
 		}
 		u := lsp.PathToURI(p)
-		for i, l := range strings.Split(string(b), "\n") {
+		lines := strings.Split(string(b), "\n")
+		for i, l := range lines {
 			for _, m := range wordRe.FindAllStringIndex(l, -1) {
 				if l[m[0]:m[1]] != word || (u == declURI && i == at.Line && m[0] == at.Character) || declBeforeRe.MatchString(l[:m[0]]) {
 					continue // not the word, the declaration asked about, or another declaration of the name
 				}
-				out = append(out, map[string]any{"uri": u, "range": rng{pos{i, m[0]}, pos{i, m[1]}}})
+				out = append(out, occurrence{uri: u, path: p, line: i, start: m[0], end: m[1], fileLines: lines})
 			}
 		}
 		return nil
 	})
+	return out
+}
+
+// references answers textDocument/references the way a naive server would:
+// every whole-word occurrence of the word at the position in any file under
+// root, except the occurrence at the position itself (the declaration).
+func references(root, uri, text string, at pos) []map[string]any {
+	out := []map[string]any{}
+	for _, o := range scan(root, uri, wordAt(text, at), at) {
+		out = append(out, map[string]any{"uri": o.uri, "range": rng{pos{o.line, o.start}, pos{o.line, o.end}}})
+	}
+	return out
+}
+
+// callItem is the CallHierarchyItem of a symbol.
+func callItem(uri string, s sym) map[string]any {
+	return map[string]any{
+		"name": s.name, "kind": s.kind, "uri": uri, "range": s.r, "selectionRange": s.sel,
+		"data": map[string]any{"fake": s.name},
+	}
+}
+
+// incomingCalls answers callHierarchy/incomingCalls with the same scan as
+// references, grouped by the symbol that encloses each occurrence (a file
+// item when none does). The declaration of the item is never a call.
+func incomingCalls(root, uri, name string, at pos) []map[string]any {
+	type group struct {
+		item   map[string]any
+		ranges []rng
+	}
+	var order []string
+	groups := map[string]*group{}
+	for _, o := range scan(root, uri, name, at) {
+		var encl *sym
+		syms := parse(strings.Join(o.fileLines, "\n"))
+		for i := range syms {
+			s := syms[i]
+			if s.r.Start.Line <= o.line && o.line <= s.r.End.Line && (encl == nil || s.r.Start.Line >= encl.r.Start.Line) {
+				encl = &syms[i]
+			}
+		}
+		var item map[string]any
+		key := o.uri
+		if encl != nil {
+			item = callItem(o.uri, *encl)
+			key += "#" + encl.name
+		} else {
+			item = map[string]any{"name": filepath.Base(o.path), "kind": 1, "uri": o.uri, "range": rng{}, "selectionRange": rng{}}
+		}
+		g := groups[key]
+		if g == nil {
+			g = &group{item: item}
+			groups[key] = g
+			order = append(order, key)
+		}
+		g.ranges = append(g.ranges, rng{pos{o.line, o.start}, pos{o.line, o.end}})
+	}
+	out := []map[string]any{}
+	for _, k := range order {
+		out = append(out, map[string]any{"from": groups[k].item, "fromRanges": groups[k].ranges})
+	}
 	return out
 }

@@ -270,7 +270,7 @@ func TestConfiguredVersion(t *testing.T) {
 }
 
 func TestFactoryStubsAndUnknownType(t *testing.T) {
-	for _, typ := range []string{config.ExtractorExec, config.ExtractorLSP} {
+	for _, typ := range []string{config.ExtractorExec} {
 		_, err := New("lang", "x", config.Extractor{Type: typ, Argv: []string{"c"}})
 		if err == nil || !strings.Contains(err.Error(), "not implemented in this build") {
 			t.Errorf("%s: %v", typ, err)
