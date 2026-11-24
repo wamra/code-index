@@ -1,17 +1,16 @@
 module github.com/wamra/code-index
 
-go 1.24.1
+go 1.27.4
 
 require (
-	github.com/ncruces/go-sqlite3 v0.21.3
-	github.com/tetratelabs/wazero v1.9.0
-)
-
-require (
+	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.18
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.63.13
 	github.com/aws/smithy-go v1.28.9
+	github.com/ncruces/go-sqlite3 v0.21.3
+	github.com/tetratelabs/wazero v1.9.0
+	golang.org/x/sys v0.33.0
 )
 
 require (
@@ -27,12 +26,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.39.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.44.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.52.0 // indirect
-)
-
-require (
-	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/ncruces/julianday v1.0.0 // indirect
-	golang.org/x/sys v0.33.0
 )
 
 replace github.com/ncruces/go-sqlite3 => github.com/wamra/go-sqlite3 v0.21.4-0.20261122011840-c18f8a644afa

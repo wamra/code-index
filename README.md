@@ -18,7 +18,7 @@ hooks and an LSP proxy are planned.
 
 ## Install
 
-Building from source needs Go 1.24.1 or newer. Semantic search needs Ollama
+Building from source needs Go 1.27.4 or newer. Semantic search needs Ollama
 with `embeddinggemma`, or another provider (see Configure). Without one, search
 falls back to names and full text.
 
