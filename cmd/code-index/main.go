@@ -120,16 +120,24 @@ func newFlags(name string, errw io.Writer) *flag.FlagSet {
 }
 
 // parseInterspersed parses flags that may appear before or after positional
-// arguments and returns the positionals.
+// arguments and returns the positionals. Everything after the first "--" is
+// positional as written, so a query or symbol that starts with a dash can be
+// passed as `-- -x`.
 func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
-	var pos []string
+	var pos, tail []string
+	for i, a := range args {
+		if a == "--" {
+			args, tail = args[:i:i], args[i+1:]
+			break
+		}
+	}
 	for {
 		if err := fs.Parse(args); err != nil {
 			return nil, err
 		}
 		args = fs.Args()
 		if len(args) == 0 {
-			return pos, nil
+			return append(pos, tail...), nil
 		}
 		pos = append(pos, args[0])
 		args = args[1:]
