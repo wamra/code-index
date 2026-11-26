@@ -69,6 +69,7 @@ jobs:
         with:
           go-version-file: go.mod
       - run: scripts/build-plugin.sh "$RUNNER_TEMP/plugin" "${GITHUB_SHA::7}"
+      - run: scripts/check-plugin.sh "$RUNNER_TEMP/plugin"
       - name: Push the plugin branch
         working-directory: ${{ runner.temp }}/plugin
         run: |

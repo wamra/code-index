@@ -2,7 +2,8 @@
 # Cross-build release archives and checksums into dist/ with plain Go tooling.
 # Each archive is self-installing: the binary, install.sh (install.ps1 on
 # Windows), the code-index-search mod (.claude-plugin/marketplace.json and
-# plugins/, minus the generated .claude-plugin/types/), README and LICENSE.
+# plugins/, minus the generated .claude-plugin/types/), README, LICENSE and
+# THIRD_PARTY_NOTICES.md.
 # Usage: scripts/build-release.sh [VERSION]
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,7 +16,7 @@ for t in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows
   stage="$OUT/$name"; mkdir -p "$stage"
   exe=code-index; [ "$os" = windows ] && exe=code-index.exe
   ( cd "$ROOT" && CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$stage/$exe" ./cmd/code-index )
-  cp "$ROOT/LICENSE" "$ROOT/README.md" "$stage/"
+  cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$ROOT/README.md" "$stage/"
   cp "$ROOT/skills/code-search/SKILL.md" "$stage/SKILL.md"
   mkdir -p "$stage/.claude-plugin"
   cp "$ROOT/.claude-plugin/marketplace.json" "$stage/.claude-plugin/"

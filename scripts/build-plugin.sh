@@ -15,5 +15,5 @@ cp "$ROOT/scripts/plugin-launcher.sh" "$OUT/bin/code-index"
 cp "$P/.claude-plugin/plugin.json" "$OUT/.claude-plugin/"
 cp "$P/hooks/hooks.json" "$P/hooks/register.ts" "$OUT/hooks/"
 mkdir -p "$OUT/skills/code-search" && cp "$ROOT/skills/code-search/SKILL.md" "$OUT/skills/code-search/"
-cp "$ROOT/LICENSE" "$ROOT/README.md" "$OUT/"
+cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$ROOT/README.md" "$OUT/"
 chmod +x "$OUT"/bin/*
