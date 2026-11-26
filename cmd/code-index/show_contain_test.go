@@ -63,7 +63,7 @@ func TestShowIgnoresRootStoredInRepoIndex(t *testing.T) {
 	e := setup(t, "")
 	mustOK(t, "index")
 	decoy := t.TempDir()
-	os.WriteFile(filepath.Join(decoy, "lib.ps1"), []byte("STOLEN CONTENT\n"), 0o644)
+	os.WriteFile(filepath.Join(decoy, "lib.ps1"), []byte(strings.Repeat("STOLEN CONTENT\n", 40)), 0o644)
 	st, err := store.Open(e.dbPath)
 	if err != nil {
 		t.Fatal(err)
