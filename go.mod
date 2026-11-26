@@ -29,4 +29,4 @@ require (
 	github.com/ncruces/julianday v1.0.0 // indirect
 )
 
-replace github.com/ncruces/go-sqlite3 => github.com/wamra/go-sqlite3 v0.21.4-0.20261122011840-c18f8a644afa
+replace github.com/ncruces/go-sqlite3 => github.com/wamra/go-sqlite3 v0.21.4-0.20261122011840-db0c8d9b495d
