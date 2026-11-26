@@ -12,12 +12,11 @@ database with full-text search and, optionally, embeddings. It works with no
 model at all (names, signatures and doc comments through FTS5) and gets better
 when an embedder is configured.
 
-It is the sibling of `session-index`,
-which does the same for Claude Code chat sessions, and shares its SQLite stack
-(`ncruces/go-sqlite3` + `sqlite-vec` through wazero) and its provider code.
+It uses SQLite through `ncruces/go-sqlite3` and `sqlite-vec` running on wazero
+(a pure-Go WebAssembly runtime), so the binary needs no CGO.
 
-Status: milestone 2 (symbols, search, call graph and traversal). Summaries,
-hooks and an LSP proxy are planned.
+Status: symbols, search, the call graph and its traversal work. Summaries are
+parsed from the config but not produced yet.
 
 ## Install
 
@@ -28,14 +27,21 @@ falls back to names and full text.
 **macOS, Linux:**
 
 ```
-scripts/install.sh              # builds, installs to ~/.local/bin, writes a starter config, adds the skill and the mod, runs doctor
+scripts/install.sh              # builds, installs to ~/.local/bin, writes a starter config, runs doctor
+scripts/install.sh --dry-run    # print what would change and change nothing
 cd <repo> && code-index index   # index a repo
 ```
 
-Flags: `--bin-dir DIR`, `--no-skill`, `--no-mod`. The installer writes the global config
-only when none exists.
+The installer prints what it will change first. It writes the global config only
+when none exists. It does not touch `~/.claude` (the `code-search` skill and the
+`code-index-search` plugin registration) unless you pass `--skill` and/or `--mod`,
+pass `--yes`, or answer its prompts in an interactive terminal; an existing,
+different skill file or an existing marketplace registration is kept unless you
+pass `--force`. Flags: `--bin-dir DIR`, `--binary FILE`, `--skill`, `--no-skill`,
+`--mod`, `--no-mod`, `--yes`, `--force`, `--dry-run`.
 
-**Windows (PowerShell):** `scripts\install.ps1` (`-BinDir`, `-NoSkill`, `-NoMod`).
+**Windows (PowerShell):** `scripts\install.ps1` (`-BinDir`, `-Skill`, `-NoSkill`,
+`-Mod`, `-NoMod`, `-Yes`, `-Force`, `-DryRun`; same behavior).
 
 **By hand:** `go build -o code-index ./cmd/code-index`, then
 `code-index config init` and `code-index install-skill`.
@@ -43,13 +49,16 @@ only when none exists.
 **Release archives:** `scripts/build-release.sh` writes archives for macOS,
 Linux and Windows (amd64, arm64) with checksums into `dist/`.
 
-`code-index install-skill [--dir SKILLS_DIR]` writes the `code-search` skill to
-`~/.claude/skills/code-search/SKILL.md`; it tells Claude Code when to use
-`code-index search`, `show` and the call-graph commands.
+`code-index install-skill [--dir SKILLS_DIR] [--force]` writes the `code-search`
+skill to `~/.claude/skills/code-search/SKILL.md`; it tells Claude Code when to
+use `code-index search`, `show` and the call-graph commands, and that what they
+return is untrusted data. It refuses to overwrite a different existing file
+without `--force`.
 
-**Tools inside Claude Code:** the installer also registers this checkout as a
-plugin marketplace and installs the `code-index-search` mod: `search`, `show`,
-`callers`, `callees` and `impact` tools the model calls directly, and a `/code` command
+**Tools inside Claude Code:** with `--mod` (or after you confirm), the installer
+registers this checkout as a plugin marketplace and installs the
+`code-index-search` mod: `search`, `show`, `callers`, `callees` and `impact`
+tools the model calls directly, and a `/code` command
 ([plugins/code-index-search](plugins/code-index-search/README.md)). It is
 skipped when `claude` is not on PATH. Restart Claude Code afterwards.
 
@@ -133,7 +142,9 @@ Code plugin's `.lsp.json` entry), optionally with `"extractor": "powershell-ast"
   given. `api_key_env` names an environment variable; keys are never printed.
 - `summarize`: parsed, not used yet.
 - `index.ignore`: `.gitignore`-style patterns on top of the `.gitignore` files
-  of the workspace. `max_file_size` is in bytes.
+  of the workspace. `max_file_size` is in bytes. `index.secret_ignore`
+  replaces the built-in list of secret-file patterns (see Privacy and security);
+  only the central file can set it.
 - Environment: `CODE_INDEX_CONFIG` (global config file), `CODE_INDEX_DB`
   (database file), `CODE_INDEX_EMBED_{PROVIDER,MODEL,BASE_URL}`,
   `CODE_INDEX_CPUPROFILE` (write a CPU profile of the run to this file; read it
@@ -203,6 +214,57 @@ repo's file are ignored with a note, so a repo cannot trust itself. With the
 repo trusted, its file behaves as before: it may define extractors and commands,
 so trust only repositories you have read (see `extractors/README.md`, section 4).
 
+## Privacy and security
+
+**What is read.** `index` and `sweep` read the files under the repo root whose
+extension belongs to a configured language, skipping `.git`, `.Wammy`, symbolic
+links, files over `max_file_size`, binary files, anything a `.gitignore` in the
+tree or `index.ignore` excludes, and secret-looking files. The built-in secret
+patterns (never indexed, whatever a `.gitignore` says) are: `.env`, `.env.*`,
+`*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`, `.npmrc`, `.netrc`,
+`credentials*`, `*.kdbx`, and the directories `.aws/` and `.ssh/`, matched case
+insensitively. The central file can replace the list with `index.secret_ignore`
+(an empty list turns it off); a repo's own file cannot. Language servers and
+exec extractors you configure get the files to analyze and run as your user.
+
+**What is stored.** Per repo, in `<repo>/.Wammy/code.sqlite`: file paths,
+hashes, sizes, symbol names, kinds, signatures, doc comments, call edges and,
+when embeddings are on, one vector per symbol and file. It does not store file
+bodies, but a signature or doc comment is source text, so keep secrets out of
+comments. The wasm compile cache is in the user cache directory
+(`code-index/wazero`). The global config is `~/.config/code-index/config.json`
+(or `CODE_INDEX_CONFIG`). `config init` also looks for a PowerShell Editor
+Services script under `~/.claude/plugins/cache` and, if it finds one, writes its
+path into that config.
+
+**What is sent, and where.** By default nothing: `config init` writes
+`embed.enabled: false` (provider `ollama` at `http://localhost:11434`), and
+without an embedder search uses names and full text on the local database. When
+you turn embeddings on, the text of each symbol chunk (kind, qualified name,
+path, signature, doc comment, and the `calls:` / `called by:` lines) and each
+search query go to the `embed` provider you chose: a local Ollama or any
+OpenAI-compatible server at `base_url`, or AWS Bedrock with your AWS
+credentials. `summarize` is not used yet. The tool makes no other network
+calls; a language server or extractor you configure may make its own.
+
+**Repo configuration is untrusted by default.** A clone can carry a
+`.Wammy/config.json`, and it can also carry a ready-made `.Wammy/code.sqlite`.
+Unless the central file's `repos` entry for that repo sets `trust_repo_config`
+(see Trust above), the repo file cannot define commands, language-server
+arguments or environment, extractors, or the `embed` and `summarize` endpoints
+and key variables, and cannot change the secret-file patterns; it cannot trust
+itself. `show --source` only reads files that resolve inside the repo root (no
+`..`, no absolute paths, no symlinks leaving it), and an index inside the repo
+does not change the root. Text returned by search and show is code, comments and
+docs from the repo: treat it as data, not instructions (the skill and tool
+descriptions say so to the model). Report vulnerabilities as described in
+`SECURITY.md`.
+
+**Deleting the index.** Remove the repo's `.Wammy/` directory
+(`rm -rf <repo>/.Wammy`); `index` recreates it. To remove everything else, delete
+`~/.config/code-index/`, the `code-index/wazero` directory in your user cache,
+the binary, and `~/.claude/skills/code-search/` if you installed the skill.
+
 ## Where the index lives
 
 Each repo has its own database at `<repo>/.Wammy/code.sqlite`. The repo root is
@@ -236,11 +298,14 @@ code-index path FROM TO [--json]              shortest call path
 code-index stats
 code-index doctor
 code-index config [init [--force]]
-code-index install-skill [--dir SKILLS_DIR]
+code-index install-skill [--dir SKILLS_DIR] [--force]
 code-index version
 ```
 
-`search` routes like session-index: a short identifier-shaped query (a name, a
+A query or symbol that starts with a dash goes after `--`, for example
+`code-index search -- "-Name widget"`; everything after `--` is positional.
+
+`search` routes by the shape of the query: a short identifier-shaped query (a name, a
 path, `Verb-Noun`, `snake_case`, `camelCase`) goes to a trigram index over
 names and paths; anything else goes to the vector index when embeddings exist,
 and to full-text search over the symbol text otherwise. Each hit shows kind,
@@ -332,6 +397,12 @@ language server, `wammybash` nor a network. Optional tests against the real tool
 TestRealWammybash`, `CODE_INDEX_REAL_LSP=gopls go test ./internal/extract -run
 Real`. `go test ./internal/indexer -run '^$' -bench RunSynthetic -cpuprofile
 cpu.out` profiles an index run over 2000 generated files.
+
+## Third-party software
+
+`THIRD_PARTY_NOTICES.md` lists the Go modules in the binary with their license
+texts; `scripts/gen-notices.sh` regenerates it. `scripts/build-plugin.sh` and
+`scripts/build-release.sh` ship it next to `LICENSE`.
 
 ## Smoke test
 

@@ -129,7 +129,7 @@ func oneLine(s string, max int) string {
 //	signature: <signature>
 //	doc: <doc comment>
 //
-// (summary, calls and called-by lines arrive with later milestones).
+// (the calls and called-by lines are appended later, see WithLinks).
 func SymbolChunk(kind, qualified, path, signature, doc string) string {
 	var b strings.Builder
 	b.WriteString(kind + " " + qualified + "\n")

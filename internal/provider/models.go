@@ -15,7 +15,7 @@ const (
 	CohereQueryType = "search_query"
 )
 
-// Prefixes of embeddinggemma (also the historical session-index defaults).
+// Prefixes of embeddinggemma .
 const (
 	GemmaDocPrefix   = "title: none | text: "
 	GemmaQueryPrefix = "task: search result | query: "

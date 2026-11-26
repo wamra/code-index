@@ -82,7 +82,7 @@ func cmdStats(args []string, out, errw io.Writer) int {
 	fmt.Fprintf(out, "  by kind:   %s\n", breakdown(ctx, db, `SELECT kind, count(*) FROM edges GROUP BY kind ORDER BY count(*) DESC, kind`))
 	fmt.Fprintf(out, "  by source: %s\n", breakdown(ctx, db, `SELECT source, count(*) FROM edges GROUP BY source ORDER BY count(*) DESC, source`))
 	fmt.Fprintf(out, "  by conf:   %s\n", breakdown(ctx, db, `SELECT confidence, count(*) FROM edges GROUP BY confidence ORDER BY count(*) DESC, confidence`))
-	fmt.Fprintf(out, "summaries:   %d (not populated before milestone 3)\n", count(ctx, db, `SELECT count(*) FROM summaries`))
+	fmt.Fprintf(out, "summaries:   %d (not populated yet)\n", count(ctx, db, `SELECT count(*) FROM summaries`))
 	fp, _ := st.Meta(ctx, "embed_fingerprint")
 	dims, _ := st.VecDims(ctx)
 	if fp == "" {

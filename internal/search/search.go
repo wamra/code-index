@@ -376,7 +376,7 @@ func chunksToTargets(ctx context.Context, db *sql.DB, chunks []cand) ([]cand, er
 		}
 		t := cand{kind: tk, id: tid, score: c.score}
 		if tk != "symbol" && tk != "file" {
-			continue // module roll-ups arrive with a later milestone
+			continue // module-level summaries are not produced yet
 		}
 		if seen[t.key()] {
 			continue
