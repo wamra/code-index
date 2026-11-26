@@ -85,7 +85,10 @@ func openExisting() (*store.Store, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("open index: %w", err)
 	}
-	if r, _ := st.Meta(context.Background(), "root"); r != "" {
+	// The root recorded in the index is used only when the user chose the database
+	// with CODE_INDEX_DB; an index found inside a repo (it can arrive with a clone)
+	// never moves the root that config and source reads are resolved against.
+	if r, _ := st.Meta(context.Background(), "root"); r != "" && os.Getenv("CODE_INDEX_DB") != "" {
 		root = r
 	}
 	return st, root, nil
