@@ -23,6 +23,21 @@ const DefaultMaxFileSize = 1 << 20
 // DefaultIgnore are the index.ignore globs used when the file sets none.
 var DefaultIgnore = []string{".git", "node_modules", "vendor", "dist", "build", "__pycache__", ".venv", "target"}
 
+// DefaultSecretIgnore are file and directory patterns that are never indexed
+// unless the central config replaces the list with index.secret_ignore. They
+// are matched separately from .gitignore and index.ignore, so a negation in
+// either cannot bring them back. Matching is case-insensitive.
+var DefaultSecretIgnore = []string{".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*.p12", "*.pfx",
+	".npmrc", ".netrc", "credentials*", "*.kdbx", ".aws/", ".ssh/"}
+
+// SecretPatterns returns the secret-file patterns in force.
+func (i Index) SecretPatterns() []string {
+	if i.SecretIgnore != nil {
+		return append([]string(nil), *i.SecretIgnore...)
+	}
+	return append([]string(nil), DefaultSecretIgnore...)
+}
+
 // Embed is the "embed" section: the provider settings plus an on/off switch.
 // Enabled left unset means "on when a provider or model is given".
 type Embed struct {
@@ -53,6 +68,10 @@ type Language struct {
 type Index struct {
 	Ignore      []string `json:"ignore,omitempty"`
 	MaxFileSize int64    `json:"max_file_size,omitempty"`
+	// SecretIgnore replaces DefaultSecretIgnore when set (an empty list turns the
+	// secret-file ignores off). Only the central file may set it; a repo file
+	// that does is told it was ignored.
+	SecretIgnore *[]string `json:"secret_ignore,omitempty"`
 }
 
 // Config is the contents of config.json.
@@ -371,7 +390,7 @@ func capText(f func() (int, string)) string {
 }
 
 // InitComment is the "_comment" of the file written by `config init`.
-const InitComment = "code-index configuration. embed: provider \"ollama\", \"openai\" (any OpenAI-compatible server) or \"bedrock\"; set enabled to true to build and use embeddings (without them everything works through full-text search). api_key_env is the NAME of an environment variable holding the API key, never the key itself. summarize is parsed but not used yet. languages: one entry per language, with its extensions (they must include the dot) and the extractor(s) that give its symbols and call edges, in run order. extractors: the definitions the languages name; type \"lsp\" is a language server (argv is the command line), type \"exec\" is a subprocess that prints JSON-lines records ({root}, {listFile} and {embedded:NAME} are replaced in argv); powershell-ast is built in. The older shape (a language with command, args, env) is still read. index.ignore: path or glob patterns skipped in addition to .gitignore; index.max_file_size in bytes. repos: settings for one repo, keyed by its root path, same shape as this file (trust_repo_config true also lets that repo's own .Wammy/config.json define extractors and commands; otherwise it can only set language extensions, extractor names and index). Environment overrides: CODE_INDEX_CONFIG, CODE_INDEX_DB, CODE_INDEX_{EMBED,SUMMARIZE}_{PROVIDER,MODEL,BASE_URL}."
+const InitComment = "code-index configuration. embed: provider \"ollama\", \"openai\" (any OpenAI-compatible server) or \"bedrock\"; set enabled to true to build and use embeddings (without them everything works through full-text search). api_key_env is the NAME of an environment variable holding the API key, never the key itself. summarize is parsed but not used yet. languages: one entry per language, with its extensions (they must include the dot) and the extractor(s) that give its symbols and call edges, in run order. extractors: the definitions the languages name; type \"lsp\" is a language server (argv is the command line), type \"exec\" is a subprocess that prints JSON-lines records ({root}, {listFile} and {embedded:NAME} are replaced in argv); powershell-ast is built in. The older shape (a language with command, args, env) is still read. index.ignore: path or glob patterns skipped in addition to .gitignore; index.max_file_size in bytes; index.secret_ignore (central file only) replaces the built-in list of secret-file patterns that are never indexed (.env, *.pem, *.key, id_rsa*, .aws/, .ssh/ and similar). repos: settings for one repo, keyed by its root path, same shape as this file (trust_repo_config true also lets that repo's own .Wammy/config.json define extractors and commands; otherwise it can only set language extensions, extractor names and index). Environment overrides: CODE_INDEX_CONFIG, CODE_INDEX_DB, CODE_INDEX_{EMBED,SUMMARIZE}_{PROVIDER,MODEL,BASE_URL}."
 
 // KnownServers are the language server commands `config init` looks for on PATH.
 var KnownServers = []struct {

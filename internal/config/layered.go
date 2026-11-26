@@ -110,7 +110,11 @@ func (l layer) mergeInto(c *Config, src Sources) {
 		c.Summarize, src["summarize"] = l.cfg.Summarize, l.source
 	}
 	if l.sections["index"] {
+		keep := c.Index.SecretIgnore
 		c.Index, src["index"] = l.cfg.Index, l.source
+		if !l.trusted {
+			c.Index.SecretIgnore = keep // an untrusted file cannot switch the secret ignores off
+		}
 	}
 	for n, lang := range l.cfg.Languages {
 		if !l.trusted {
@@ -172,6 +176,10 @@ func gateLayer(l layer, fix string) (layer, []string, map[string]string) {
 	if l.sections["summarize"] {
 		drop("summarize", dest)
 		out.sections["summarize"], out.cfg.Summarize = false, provider.SummarizeConfig{}
+	}
+	if l.sections["index"] && l.cfg.Index.SecretIgnore != nil {
+		drop("index.secret_ignore", "a repo file cannot change the secret-file ignores unless trusted")
+		out.cfg.Index.SecretIgnore = nil
 	}
 	out.cfg.Extractors = nil
 	for _, n := range sortedKeys(l.cfg.Extractors) {

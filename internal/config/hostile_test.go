@@ -103,3 +103,32 @@ func TestTrustFlagOnlyFromCentralReposEntry(t *testing.T) {
 		t.Errorf("top-level trust_repo_config: err = %v", err)
 	}
 }
+
+// A repo file cannot switch the secret-file ignores off or replace them; the
+// central file can.
+func TestSecretIgnoreOnlyFromTrustedConfig(t *testing.T) {
+	const repo = `{"index":{"max_file_size":7,"secret_ignore":[]}}`
+	cp, root := layeredSetup(t, `{}`, repo)
+	c, _, notes, err := LoadLayered(cp, root, env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Index.SecretIgnore != nil || c.Index.MaxFileSize != 7 || len(c.Resolved().Index.SecretPatterns()) != len(DefaultSecretIgnore) {
+		t.Errorf("untrusted repo changed the secret ignores: %+v", c.Index)
+	}
+	if !strings.Contains(joined(notes), "ignored index.secret_ignore") {
+		t.Errorf("no note:\n%s", joined(notes))
+	}
+	// a central value survives an untrusted repo index section
+	cp, root = layeredSetup(t, `{"index":{"secret_ignore":["*.pem"]}}`, repo)
+	c, _, _, _ = LoadLayered(cp, root, env(nil))
+	if p := c.Index.SecretPatterns(); len(p) != 1 || p[0] != "*.pem" {
+		t.Errorf("central secret_ignore lost: %v", p)
+	}
+	// trusted repo file may set it
+	cp, root = layeredSetup(t, `{"repos":{"@ROOT@":{"trust_repo_config":true}}}`, repo)
+	c, _, _, _ = LoadLayered(cp, root, env(nil))
+	if c.Index.SecretIgnore == nil || len(c.Index.SecretPatterns()) != 0 {
+		t.Errorf("trusted repo could not set secret_ignore: %+v", c.Index)
+	}
+}

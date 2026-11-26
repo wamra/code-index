@@ -29,7 +29,8 @@ type walkStats struct {
 }
 
 // walk lists the files under root that belong to a configured language,
-// honoring .gitignore files (root and nested) and the index.ignore globs.
+// honoring .gitignore files (root and nested), the index.ignore globs and the
+// secret-file patterns (config.DefaultSecretIgnore).
 // Symbolic links are not followed. .git and .Wammy (the index itself) are
 // always skipped, whatever the ignore files say.
 func walk(root string, cfg config.Config) ([]candidate, walkStats, error) {
@@ -37,6 +38,13 @@ func walk(root string, cfg config.Config) ([]candidate, walkStats, error) {
 	var st walkStats
 	base := &ignore.Set{}
 	base.Add(ignore.Parse("", []byte(strings.Join(cfg.Index.Ignore, "\n"))))
+	// Secret-file patterns are a separate set, never changed by a .gitignore
+	// negation. Both the path and its lower-case form are tested.
+	secrets := &ignore.Set{}
+	secrets.Add(ignore.Parse("", []byte(strings.ToLower(strings.Join(cfg.Index.SecretPatterns(), "\n")))))
+	isSecret := func(rel string, dir bool) bool {
+		return secrets.Ignored(rel, dir) || secrets.Ignored(strings.ToLower(rel), dir)
+	}
 
 	var visit func(dirRel string, set *ignore.Set) error
 	visit = func(dirRel string, set *ignore.Set) error {
@@ -60,7 +68,7 @@ func walk(root string, cfg config.Config) ([]candidate, walkStats, error) {
 				continue
 			}
 			if e.IsDir() {
-				if name == ".git" || name == ".Wammy" || set.Ignored(rel, true) {
+				if name == ".git" || name == ".Wammy" || isSecret(rel, true) || set.Ignored(rel, true) {
 					continue
 				}
 				if err := visit(rel, set); err != nil {
@@ -68,7 +76,7 @@ func walk(root string, cfg config.Config) ([]candidate, walkStats, error) {
 				}
 				continue
 			}
-			if !e.Type().IsRegular() || set.Ignored(rel, false) {
+			if !e.Type().IsRegular() || isSecret(rel, false) || set.Ignored(rel, false) {
 				continue
 			}
 			lang, ok := cfg.LanguageFor(path.Ext(name))
