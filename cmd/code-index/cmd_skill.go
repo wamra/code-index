@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,7 @@ func cmdInstallSkill(args []string, out, errw io.Writer) int {
 	fs := newFlags("install-skill", errw)
 	dir := fs.String("dir", "", "skills directory (default ~/.claude/skills)")
 	dry := fs.Bool("dry-run", false, "print the target path and write nothing")
+	force := fs.Bool("force", false, "overwrite an existing, different SKILL.md")
 	if pos, err := parseInterspersed(fs, args); err != nil || len(pos) != 0 {
 		return 2
 	}
@@ -28,6 +30,15 @@ func cmdInstallSkill(args []string, out, errw io.Writer) int {
 	if *dry {
 		fmt.Fprintf(out, "dry run: skill would be written to %s\n", target)
 		return 0
+	}
+	if old, err := os.ReadFile(target); err == nil {
+		if bytes.Equal(old, skills.CodeSearch) {
+			fmt.Fprintf(out, "skill already installed: %s\n", target)
+			return 0
+		}
+		if !*force {
+			return fail(errw, "install-skill: %s exists and differs; use --force to overwrite it", target)
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return fail(errw, "install-skill: %v", err)

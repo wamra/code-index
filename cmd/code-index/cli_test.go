@@ -460,3 +460,25 @@ func TestInstallSkill(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestInstallSkillDoesNotOverwrite(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	target := filepath.Join(tmp, ".claude", "skills", "code-search", "SKILL.md")
+	mustOK(t, "install-skill")
+	if out := mustOK(t, "install-skill"); !strings.Contains(out, "already installed") {
+		t.Errorf("second install: %s", out)
+	}
+	os.WriteFile(target, []byte("mine\n"), 0o644)
+	if code, _, errw := cli(t, "install-skill"); code == 0 || !strings.Contains(errw, "--force") {
+		t.Errorf("overwrite without --force: %d %q", code, errw)
+	}
+	if b, _ := os.ReadFile(target); string(b) != "mine\n" {
+		t.Errorf("file was overwritten: %q", b)
+	}
+	mustOK(t, "install-skill", "--force")
+	if b, _ := os.ReadFile(target); string(b) == "mine\n" {
+		t.Error("--force did not overwrite")
+	}
+}
