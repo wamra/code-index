@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -146,7 +147,11 @@ func cmdShow(args []string, out, errw io.Writer) int {
 	r.Stale = search.Staleness(root, r.Path, r.mtime, r.size, r.sha)
 	var src string
 	if *source {
-		if data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(r.Path))); err == nil {
+		data, err := readInsideRoot(root, r.Path)
+		if errors.Is(err, errOutsideRoot) {
+			return fail(errw, "show: %v", err)
+		}
+		if err == nil {
 			lines := strings.Split(string(data), "\n")
 			lo, hi := r.StartLine-1, min(r.EndLine, len(lines))
 			if lo >= 0 && lo < hi {
@@ -183,4 +188,33 @@ func cmdShow(args []string, out, errw io.Writer) int {
 		fmt.Fprintf(out, "---\n%s\n", src)
 	}
 	return 0
+}
+
+var errOutsideRoot = errors.New("source path is outside the repo root")
+
+// readInsideRoot reads the file rel (a slash-separated path from the index)
+// only if it resolves inside root: it rejects absolute paths, ".." that leave
+// the root, and symlinks (in any component) that point outside it. A missing
+// file is a plain read error, not errOutsideRoot.
+func readInsideRoot(root, rel string) ([]byte, error) {
+	native := filepath.FromSlash(rel)
+	if filepath.IsAbs(native) || filepath.VolumeName(native) != "" || strings.HasPrefix(rel, "/") {
+		return nil, fmt.Errorf("%w: %q is absolute", errOutsideRoot, rel)
+	}
+	joined := filepath.Join(root, native)
+	if lex, err := filepath.Rel(root, joined); err != nil || lex == ".." || strings.HasPrefix(lex, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("%w: %q leaves the root", errOutsideRoot, rel)
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
+	realFile, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		return nil, err
+	}
+	if in, err := filepath.Rel(realRoot, realFile); err != nil || in == ".." || strings.HasPrefix(in, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("%w: %q resolves outside it", errOutsideRoot, rel)
+	}
+	return os.ReadFile(realFile)
 }
