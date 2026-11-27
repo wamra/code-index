@@ -1,0 +1,17 @@
+{
+  "name": "code-index-search",
+  "version": "0.2.0",
+  "description": "Search and read a repo's code index through the code-index binary: five model tools (search, show, callers, callees, impact) and a /code command.",
+  "userConfig": {
+    "binary": {
+      "type": "string",
+      "title": "code-index binary",
+      "description": "Command or absolute path of the code-index executable.",
+      "default": "code-index"
+    }
+  },
+  "license": "MIT",
+  "author": {
+    "name": "wamra"
+  }
+}
