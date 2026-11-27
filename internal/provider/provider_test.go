@@ -313,6 +313,10 @@ func TestKnownModelDefaults(t *testing.T) {
 		{"bge-m3", "", "Represent this sentence for searching relevant passages: ", 0},
 		{"BAAI/bge-small-en-v1.5", "", "Represent this sentence for searching relevant passages: ", 0},
 		{"text-embedding-3-small", "", "", 1536},
+		{"qwen3-embedding:0.6b", "", "Instruct: Given a natural-language query about a codebase, retrieve the relevant code symbols and passages\nQuery:", 0},
+		{"qwen3-embedding:4b", "", "Instruct: Given a natural-language query about a codebase, retrieve the relevant code symbols and passages\nQuery:", 0},
+		{"qwen3-embedding:8b", "", "Instruct: Given a natural-language query about a codebase, retrieve the relevant code symbols and passages\nQuery:", 0},
+		{"Qwen/Qwen3-Embedding-0.6B", "", "Instruct: Given a natural-language query about a codebase, retrieve the relevant code symbols and passages\nQuery:", 0},
 	} {
 		d, ok := KnownEmbedModel(c.model)
 		if !ok || d.DocPrefix != c.doc || d.QueryPrefix != c.query || d.Dims != c.dims {
@@ -384,5 +388,26 @@ func TestOpenAIHealthRestrictedKeyFallsBackToProbe(t *testing.T) {
 	s401 := server(t, 401, ``, nil)
 	if err := openaiEmb(t, s401.URL, EmbedConfig{Model: "m"}).Health(context.Background()); !errors.Is(err, ErrAuth) {
 		t.Fatal(err)
+	}
+}
+
+func TestExplicitQwen3ModelResolves(t *testing.T) {
+	r := EmbedConfig{Model: "qwen3-embedding:0.6b"}.Resolved()
+	if r.Model != "qwen3-embedding:0.6b" || *r.DocPrefix != "" || *r.QueryPrefix != Qwen3QueryPrefix {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestDefaultIsStillGemma(t *testing.T) {
+	r := EmbedConfig{}.Resolved()
+	if r.Model != "embeddinggemma" || r.Dims != 768 || *r.DocPrefix != GemmaDocPrefix || *r.QueryPrefix != GemmaQueryPrefix {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestStoredGemmaFingerprintMismatchesExplicitQwen3(t *testing.T) {
+	r := EmbedConfig{Model: "qwen3-embedding:0.6b"}.Resolved()
+	if newOllamaEmbedder(r).Fingerprint() == NormalizedLegacyFingerprint {
+		t.Fatal("explicit qwen3 must not match a stored embeddinggemma fingerprint")
 	}
 }
