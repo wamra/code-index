@@ -141,6 +141,20 @@ Code plugin's `.lsp.json` entry), optionally with `"extractor": "powershell-ast"
   `bedrock`. Embeddings are off unless `enabled` is true or a provider/model is
   given. `api_key_env` names an environment variable; keys are never printed.
 - `summarize`: parsed, not used yet.
+
+#### Using Qwen3-Embedding
+
+The default embedding model is still `embeddinggemma`. `qwen3-embedding` is
+supported as an alternative. Select it with `embed.model` in the config (or
+`CODE_INDEX_EMBED_MODEL`), for example `"model": "qwen3-embedding:0.6b"`, after
+`ollama pull qwen3-embedding:0.6b`. The query instruction it expects is added to
+each search query automatically; documents take no prefix. The vector size is
+detected from the model. Switching an existing index to a different model
+needs a full re-embed. One measurement: on the maintainer's benchmark of session
+transcripts (one run, 14,010 chunks, 150 sessions, unpublished) embeddinggemma
+scored MRR 0.660 and qwen3-embedding:0.6b with the instruction 0.604 (4b with
+the instruction 0.655; without the instruction 0.516 and 0.531). Code retrieval
+was not measured.
 - `index.ignore`: `.gitignore`-style patterns on top of the `.gitignore` files
   of the workspace. `max_file_size` is in bytes. `index.secret_ignore`
   replaces the built-in list of secret-file patterns (see Privacy and security);
